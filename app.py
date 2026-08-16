@@ -64,27 +64,33 @@ for col in cols_conteo:
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ Filtros Espaciales y Temporales")
 
-# --- FILTRO 1: VEREDAS (Con control rápido) ---
+# --- FILTRO 1: VEREDAS (Con Funciones Callback Corregidas) ---
 if 'Vereda' in df.columns:
     veredas_unicas = sorted(df['Vereda'].dropna().unique().tolist())
-    
-    # Botones de gestión rápida para veredas
-    col_v1, col_v2 = st.sidebar.columns(2)
-    with col_v1:
-        if st.button("Todas", key="btn_todas_veredas", use_container_width=True):
-            st.session_state["veredas_selected"] = veredas_unicas
-    with col_v2:
-        if st.button("Limpiar", key="btn_ninguna_vereda", use_container_width=True):
-            st.session_state["veredas_selected"] = []
 
+    # Inicializar la clave en session_state si no existe
     if "veredas_selected" not in st.session_state:
         st.session_state["veredas_selected"] = veredas_unicas
 
+    # Funciones de callback para actualizar el estado antes de renderizar
+    def seleccionar_todas_veredas():
+        st.session_state["veredas_selected"] = veredas_unicas
+
+    def limpiar_todas_veredas():
+        st.session_state["veredas_selected"] = []
+
+    # Botones de gestión rápida
+    col_v1, col_v2 = st.sidebar.columns(2)
+    with col_v1:
+        st.button("Todas", on_click=seleccionar_todas_veredas, use_container_width=True)
+    with col_v2:
+        st.button("Limpiar", on_click=limpiar_todas_veredas, use_container_width=True)
+
+    # Widget Multiselect conectado a session_state
     veredas_seleccionadas = st.sidebar.multiselect(
         "Localidad / Vereda:",
         options=veredas_unicas,
-        default=st.session_state["veredas_selected"],
-        key="veredas_multiselect"
+        key="veredas_selected"
     )
 else:
     veredas_seleccionadas = []
