@@ -199,7 +199,24 @@ else:
         )
         fig_barras.update_traces(texttemplate='%{text:.1f}%', textposition='inside')
         st.plotly_chart(fig_barras, use_container_width=True)
-
+st.markdown("---")
+        
+        st.subheader("Tendencia: Tamaño de Grano vs. Mineralogía")
+        if 'Tamaño_Promedio_mm' in df_filtrado.columns:
+            mineral_tendencia = st.selectbox("Seleccione componente a analizar:", cols_conteo)
+            
+            df_tendencia = df_filtrado[['ID_Muestra', 'Vereda', 'Tamaño_Promedio_mm']].copy()
+            df_tendencia['Porcentaje'] = df_pct_filtrado[mineral_tendencia]
+            
+            fig_scatter = px.scatter(
+                df_tendencia, x="Tamaño_Promedio_mm", y="Porcentaje", 
+                color="Vereda", hover_name="ID_Muestra", size="Tamaño_Promedio_mm", 
+                trendline="ols", color_discrete_sequence=colores_profesionales,
+                labels={"Tamaño_Promedio_mm": "Tamaño de Grano (mm)", "Porcentaje": f"% de {mineral_tendencia}"}
+            )
+            st.plotly_chart(fig_scatter, use_container_width=True)
+        else:
+            st.warning("No se encontró la columna 'Tamaño_Promedio_mm' en la base de datos.")
     # --- PESTAÑA 4: REPORTES DE CAMPO ---
     with tab_reportes:
         st.subheader("Verificación Operativa")
