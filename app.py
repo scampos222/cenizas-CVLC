@@ -82,7 +82,7 @@ else:
         c3.metric("Tamaño Promedio", f"{df_filtrado['Tamaño_Promedio_mm'].mean():.2f} mm")
     st.markdown("---")
 
-   tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Mapa Interactivo", "📊 Composición de Muestra", "📈 Análisis Avanzado", "💾 Base de Datos"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Mapa Interactivo", "📊 Composición de Muestra", "📈 Análisis Avanzado", "💾 Base de Datos"])
 
     # --- PESTAÑA 1: MAPA ---
     with tab1:
