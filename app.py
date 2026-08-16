@@ -335,7 +335,7 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
     except Exception as e: st.error(f"⚠️ Error al renderizar el módulo espacial: {e}")
 
 # ==========================================
-# NUEVO: MÓDULO COMPARATIVO MULTI-MUESTRA
+# NUEVO: MÓDULO COMPARATIVO Y EXPORTACIÓN EXCEL
 # ==========================================
 def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_conteo):
     try:
@@ -353,15 +353,12 @@ def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_conteo):
             else:
                 filtro_f = []
 
-        # Aplicar filtros locales para las opciones del multiselect
         df_opciones = df_fil.copy()
-        if filtro_v:
-            df_opciones = df_opciones[df_opciones['Vereda'].isin(filtro_v)]
+        if filtro_v: df_opciones = df_opciones[df_opciones['Vereda'].isin(filtro_v)]
         if filtro_f and 'Fecha_Recoleccion' in df_opciones.columns:
             df_opciones = df_opciones[df_opciones['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d').isin(filtro_f)]
 
         muestras_disponibles = df_opciones['ID_Muestra'].tolist()
-        
         muestras_seleccionadas = st.multiselect(
             "Seleccione las muestras a comparar (Recomendado: 2 a 10):", 
             muestras_disponibles, 
@@ -392,6 +389,23 @@ def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_conteo):
             df_fisico['Fecha_Recoleccion'] = df_fisico['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d')
         
         st.dataframe(df_fisico, hide_index=True, use_container_width=True)
+        
+        # --- NUEVO: MOTOR DE EXPORTACIÓN A EXCEL (.XLSX) ---
+        st.markdown("<br>", unsafe_allow_html=True)
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_fisico.to_excel(writer, index=False, sheet_name='Datos_Fisicos_Geo')
+            df_comp_pct.to_excel(writer, index=False, sheet_name='Quimica_Porcentajes')
+            
+        excel_data = output.getvalue()
+        
+        st.download_button(
+            label="📥 Descargar Comparativa en Excel (.xlsx)",
+            data=excel_data,
+            file_name="comparativa_muestras_cvlc.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="Descarga un archivo Excel con dos pestañas: una con datos físicos y otra con la química exacta de las muestras seleccionadas."
+        )
 
     except Exception as e:
         st.error(f"⚠️ Error renderizando el módulo comparativo: {e}")
@@ -505,7 +519,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, fotos_subidas
             df_tp = df_t[df_t['Suma'] > 0].copy()
             if not df_tp.empty:
                 df_tp['V%'], df_tp['L%'], df_tp['C%'] = df_tp['Vidrio']/df_tp['Suma']*100, df_tp['Líticos']/df_tp['Suma']*100, df_tp['Cristales']/df_tp['Suma']*100
-                fig_t = px.scatter_ternary(df_tp, a='V%', b='L%', c='C%', color="Nivel_Riesgo", hover_name="ID_Muestra", size="Tamaño_Promedio_mm", title="Clasificación Petrológica (V-L-C)")
+                fig_t = px.scatter_ternary(df_tp, a='V%', b='L%', c='C%', color="Nivel_Riesgo", hover_name="ID_Muestra", size="Tamaño_Promedio_mm", title="Clasificación Petrológica")
                 fig_t.update_layout(ternary=dict(aaxis_title='Vidrio %', baxis_title='Líticos %', caxis_title='Cristales %'), margin=dict(t=40,b=40,l=40,r=40))
                 st.plotly_chart(fig_t, use_container_width=True)
 
@@ -626,8 +640,6 @@ df_fil, df_pct_fil = df_bruto[m_v & m_f], df_pct_bruto[m_v & m_f]
 
 if df_fil.empty: st.warning("⚠️ Sin resultados para los filtros aplicados.")
 else:
-    st.sidebar.download_button("📥 Descargar CSV Filtrado", df_fil.to_csv(index=False).encode('utf-8'), 'cenizas.csv', 'text/csv', use_container_width=True)
-    
     renderizar_kpis(df_fil, c_conteo)
     
     t_espacial, t_laboratorio, t_comparativo, t_operativo = st.tabs([
