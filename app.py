@@ -91,12 +91,18 @@ df_pct_filtrado = df_pct[mask_vereda & mask_fecha]
 colores_profesionales = px.colors.qualitative.Pastel
 
 # Función para limpiar links de Google Drive
+# Función mejorada y a prueba de errores para links de Drive
 def obtener_url_imagen(url_original):
-    if "drive.google.com" in url_original:
-        match = re.search(r'id=([a-zA-Z0-9_-]+)', url_original)
+    # Limpiamos espacios y caracteres invisibles que se cuelan del Excel
+    url_limpia = str(url_original).strip()
+    
+    if "drive.google.com" in url_limpia:
+        # Busca el ID de 33 caracteres de Google Drive sin importar cómo esté formateado el link
+        match = re.search(r'[-\w]{25,}', url_limpia)
         if match:
-            return f"https://drive.google.com/thumbnail?id={match.group(1)}&sz=w800"
-    return url_original
+            # Usamos el formato oficial de descarga directa de Google
+            return f"https://drive.google.com/uc?export=view&id={match.group(0)}"
+    return url_limpia
 
 # 4. DASHBOARD PRINCIPAL
 if df_filtrado.empty:
@@ -189,32 +195,42 @@ else:
             fig_pie.update_layout(margin=dict(t=20, b=20, l=20, r=20))
             st.plotly_chart(fig_pie, use_container_width=True)
             
-        with col_foto:
+       with col_foto:
             datos_m_crudos = df_filtrado[df_filtrado['ID_Muestra'] == muestra_sel].iloc[0]
             
-            # --- LÓGICA DE MULTI-FOTOS ---
+            # --- GALERÍA CARRUSEL ---
             if 'URLs_Fotos' in datos_m_crudos and pd.notna(datos_m_crudos['URLs_Fotos']):
-                # Separar los links por comas. Convertimos a string por seguridad.
                 urls_crudas = str(datos_m_crudos['URLs_Fotos']).split(',')
-                # Limpiamos espacios en blanco de cada link
                 urls_limpias = [u.strip() for u in urls_crudas if u.strip() and u.strip() != 'nan']
                 
                 if urls_limpias:
                     st.write("📷 **Registro Fotográfico de la Muestra:**")
                     
-                    # Si hay más de 3 fotos, limitamos la vista a 3 por fila para no romper el diseño
-                    max_por_fila = 3 if len(urls_limpias) > 3 else len(urls_limpias)
-                    cols_galeria = st.columns(max_por_fila)
-                    
-                    for i, url in enumerate(urls_limpias):
-                        # Este cálculo asegura que las fotos bajen de renglón si hay más de 3
-                        columna_actual = cols_galeria[i % max_por_fila]
+                    # Manejo de estado para recordar qué foto estamos viendo
+                    clave_estado = f"foto_idx_{muestra_sel}"
+                    if clave_estado not in st.session_state:
+                        st.session_state[clave_estado] = 0
                         
-                        with columna_actual:
-                            # Usamos nuestra función antibloqueo de Google Drive
-                            url_final = obtener_url_imagen(url)
-                            # Mostramos la foto con un subtítulo
-                            st.image(url_final, caption=f"Foto {i+1}", use_container_width=True)
+                    # Controles del carrusel (Botones Anterior / Siguiente)
+                    col_btn1, col_texto, col_btn2 = st.columns([1, 2, 1])
+                    
+                    with col_btn1:
+                        if st.button("⬅️ Anterior", key=f"prev_{muestra_sel}"):
+                            st.session_state[clave_estado] = (st.session_state[clave_estado] - 1) % len(urls_limpias)
+                    
+                    with col_texto:
+                        st.markdown(f"<div style='text-align: center; margin-top: 8px;'>Foto {st.session_state[clave_estado] + 1} de {len(urls_limpias)}</div>", unsafe_allow_html=True)
+                        
+                    with col_btn2:
+                        if st.button("Siguiente ➡️", key=f"next_{muestra_sel}"):
+                            st.session_state[clave_estado] = (st.session_state[clave_estado] + 1) % len(urls_limpias)
+                    
+                    # Mostrar la foto actual seleccionada grande y hermosa
+                    url_actual = urls_limpias[st.session_state[clave_estado]]
+                    url_final = obtener_url_imagen(url_actual)
+                    
+                    st.image(url_final, use_container_width=True)
+                    
                 else:
                     st.info("No se encontraron enlaces válidos de fotografías.")
             else:
