@@ -293,9 +293,9 @@ else:
             else:
                 st.info("Sin registro fotográfico asociado.")
 
-    # --- PESTAÑA 3: ANÁLISIS AVANZADO ---
+   # --- PESTAÑA 3: ANÁLISIS AVANZADO ---
     with tab_analisis:
-        st.subheader("Comparativa de Distribución Mineralógica")
+        st.subheader("⚖️ Comparativa de Distribución Mineralógica")
         comp_col1, comp_col2 = st.columns(2)
         
         with comp_col1:
@@ -323,10 +323,64 @@ else:
         st.plotly_chart(fig_barras, use_container_width=True)
 
         st.markdown("---")
+
+        # --- NUEVO: DIAGRAMA TERNARIO ---
+        st.subheader("🔺 Diagrama Ternario de Clasificación")
+        st.write("Seleccione los 3 componentes para clasificar las muestras:")
         
-        st.subheader("Tendencia: Tamaño de Grano vs. Mineralogía")
+        col_t1, col_t2, col_t3 = st.columns(3)
+        with col_t1: comp_a = st.selectbox("Vértice Superior (A):", cols_conteo, index=0)
+        with col_t2: comp_b = st.selectbox("Vértice Izquierdo (B):", cols_conteo, index=1 if len(cols_conteo) > 1 else 0)
+        with col_t3: comp_c = st.selectbox("Vértice Derecho (C):", cols_conteo, index=2 if len(cols_conteo) > 2 else 0)
+        
+        # Calcular proporciones relativas solo para los 3 seleccionados
+        df_ternary = df_filtrado.copy()
+        df_ternary['Suma_Ternaria'] = df_ternary[comp_a] + df_ternary[comp_b] + df_ternary[comp_c]
+        df_ternary = df_ternary[df_ternary['Suma_Ternaria'] > 0] # Filtrar muestras que tengan al menos uno
+        
+        if not df_ternary.empty:
+            df_ternary[comp_a] = df_ternary[comp_a] / df_ternary['Suma_Ternaria'] * 100
+            df_ternary[comp_b] = df_ternary[comp_b] / df_ternary['Suma_Ternaria'] * 100
+            df_ternary[comp_c] = df_ternary[comp_c] / df_ternary['Suma_Ternaria'] * 100
+            
+            fig_ternary = px.scatter_ternary(
+                df_ternary, a=comp_a, b=comp_b, c=comp_c, 
+                color="Vereda", hover_name="ID_Muestra", size="Tamaño_Promedio_mm",
+                color_discrete_sequence=colores_profesionales,
+                title="Clasificación Composicional Relativa"
+            )
+            st.plotly_chart(fig_ternary, use_container_width=True)
+        else:
+            st.info("Ninguna de las muestras actuales contiene los componentes seleccionados.")
+
+        st.markdown("---")
+
+        # --- NUEVO: LÍNEA DE TIEMPO DEL TAMAÑO DE GRANO ---
+        st.subheader("📈 Evolución Temporal del Tamaño de Grano")
+        if 'Fecha_Recoleccion' in df_filtrado.columns and 'Tamaño_Promedio_mm' in df_filtrado.columns:
+            # Limpiar datos sin fecha o tamaño y ordenarlos cronológicamente
+            df_tiempo = df_filtrado.dropna(subset=['Fecha_Recoleccion', 'Tamaño_Promedio_mm']).sort_values(by='Fecha_Recoleccion')
+            
+            if not df_tiempo.empty:
+                fig_tiempo = px.line(
+                    df_tiempo, x="Fecha_Recoleccion", y="Tamaño_Promedio_mm", 
+                    color="Vereda", markers=True, hover_name="ID_Muestra",
+                    labels={"Fecha_Recoleccion": "Fecha de Recolección", "Tamaño_Promedio_mm": "Tamaño de Grano (mm)"},
+                    color_discrete_sequence=colores_profesionales
+                )
+                fig_tiempo.update_traces(line=dict(width=3), marker=dict(size=8))
+                st.plotly_chart(fig_tiempo, use_container_width=True)
+            else:
+                st.info("No hay datos temporales válidos para trazar la gráfica.")
+        else:
+            st.warning("Faltan las columnas de Fecha o Tamaño para la gráfica temporal.")
+
+        st.markdown("---")
+        
+        # --- ORIGINAL: TENDENCIA TAMAÑO VS MINERALOGÍA ---
+        st.subheader("🔬 Relación: Tamaño de Grano vs. Mineralogía")
         if 'Tamaño_Promedio_mm' in df_filtrado.columns:
-            mineral_tendencia = st.selectbox("Seleccione componente a analizar:", cols_conteo)
+            mineral_tendencia = st.selectbox("Seleccione componente a analizar:", cols_conteo, key="tendencia_mineral")
             
             df_tendencia = df_filtrado[['ID_Muestra', 'Vereda', 'Tamaño_Promedio_mm']].copy()
             df_tendencia['Porcentaje'] = df_pct_filtrado[mineral_tendencia]
