@@ -248,9 +248,9 @@ else:
                 ).add_to(m)
 
                 # Capa 2: Mapa Amenaza SGC
-                url_servicio_arcgis = 'PEGA_AQUI_TU_ENLACE' 
+                url_servicio_arcgis = 'https://www.arcgis.com/apps/mapviewer/index.html?layerId=11&layers=4b9486b0257f475bbe3f0b8754ebd122' 
                 
-                if url_servicio_arcgis != 'PEGA_AQUI_TU_ENLACE':
+                if url_servicio_arcgis != 'https://www.arcgis.com/apps/mapviewer/index.html?layerId=11&layers=4b9486b0257f475bbe3f0b8754ebd122':
                     folium.raster_layers.WmsTileLayer(
                         url=f"{url_servicio_arcgis}/WMSServer",
                         layers='0',
