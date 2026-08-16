@@ -17,10 +17,7 @@ st.set_page_config(page_title="AshViewer-CVLC", layout="wide")
 
 st.markdown("""
     <style>
-    /* Corrección de colores para que sean legibles en Modo Claro y Oscuro */
     .main {background-color: transparent;}
-    
-    /* Estilo para las tarjetas de KPIs */
     div[data-testid="metric-container"] {
         background-color: #FFFFFF !important;
         border: 1px solid #EAEAEA !important;
@@ -28,7 +25,6 @@ st.markdown("""
         border-radius: 10px !important;
         box-shadow: 2px 2px 5px rgba(0,0,0,0.05) !important;
     }
-    /* Forzar que el texto de los KPIs siempre sea oscuro */
     div[data-testid="metric-container"] * {
         color: #2C3E50 !important;
     }
@@ -52,71 +48,86 @@ color_map_oficial = {
 colores_profesionales = px.colors.qualitative.Pastel
 
 # ==========================================
-# 2. CARGA DE DATOS Y PANEL LATERAL
+# 2. PANEL LATERAL Y CARGA OPTIMIZADA
 # ==========================================
 st.sidebar.title("Panel de Control")
 
-# --- BOTÓN DE ACTUALIZACIÓN ---
+# Botón de Actualización Inteligente (Limpia la memoria Caché)
 if st.sidebar.button("🔄 Actualizar / Recargar Plataforma", use_container_width=True):
+    st.cache_data.clear() # Esto borra la memoria y fuerza a descargar datos frescos
     st.rerun()
 st.sidebar.markdown("---")
 
 with st.sidebar.expander("📂 Carga de Datos", expanded=True):
-    # NUEVO: Input para el enlace de Google Sheets
-    url_google_sheets = st.text_input("🔗 Enlace de Google Sheets", placeholder="Pega aquí el enlace de tu Google Sheets...")
+    url_google_sheets = st.text_input("🔗 Enlace de Google Sheets", placeholder="Pega aquí el enlace...")
     st.markdown("<small><i>*Asegúrate de que el Sheets tenga acceso para 'Cualquier persona con el enlace'.</i></small>", unsafe_allow_html=True)
     st.markdown("---")
     archivo_subido = st.file_uploader("O Cargar Base Local (.xlsx / .csv)", type=["xlsx", "csv"])
     archivo_geojson = st.file_uploader("Cargar Capa Veredas (.geojson)", type=["geojson", "json"])
 
-# --- LÓGICA DE CARGA DE DATOS ---
-df = None
-
-# 1. Prioridad: Archivo local subido manualmente
-if archivo_subido is not None:
-    if archivo_subido.name.endswith('.csv'):
-        df = pd.read_csv(archivo_subido)
-    else:
-        df = pd.read_excel(archivo_subido)
-
-# 2. Segunda opción: Google Sheets
-elif url_google_sheets:
-    try:
-        # Extraer el ID del documento usando una expresión regular
-        match = re.search(r'/d/([a-zA-Z0-9-_]+)', url_google_sheets)
-        if match:
-            sheet_id = match.group(1)
-            # Construir la URL de exportación directa a CSV
-            csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
-            df = pd.read_csv(csv_url)
-            st.sidebar.success("✅ Conectado a Google Sheets")
+# --- FUNCIÓN CON MEMORIA CACHÉ Y A PRUEBA DE BALAS ---
+@st.cache_data(show_spinner="Descargando y optimizando datos...")
+def cargar_y_limpiar_datos(archivo, url_gs):
+    df_temp = None
+    
+    # 1. Cargar archivo local
+    if archivo is not None:
+        if archivo.name.endswith('.csv'):
+            df_temp = pd.read_csv(archivo)
         else:
-            st.sidebar.error("❌ El enlace de Google Sheets no parece válido.")
-    except Exception as e:
-        st.sidebar.error(f"❌ Error al leer Google Sheets: Verifica que el enlace sea público.")
+            df_temp = pd.read_excel(archivo)
+            
+    # 2. Cargar Google Sheets
+    elif url_gs:
+        try:
+            match = re.search(r'/d/([a-zA-Z0-9-_]+)', url_gs)
+            if match:
+                sheet_id = match.group(1)
+                csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+                df_temp = pd.read_csv(csv_url)
+        except Exception:
+            pass # Si falla, pasará al entorno de prueba
+            
+    # 3. Datos de prueba por defecto
+    if df_temp is None:
+        datos_prueba = {
+            'ID_Muestra': ['CAP-01', 'CAP-02', 'CAP-03'],
+            'Vereda': ['Chapio', 'Quintana', 'Coconuco'],
+            'Latitud': [2.443, 2.450, 2.341], 
+            'Longitud': [-76.606, -76.610, -76.510],
+            'Tamaño_Promedio_mm': [0.5, 0.8, 2.1],
+            'Espesor_Deposito_mm': [10, 5, 2],
+            'Fecha_Recoleccion': ['2026-08-01', '2026-08-05', '2026-08-10'],
+            'LV1': [50, 20, 10], 'LVA1': [28, 15, 5], 'Plagioclasa': [69, 40, 10],
+            'FV1': [20, 50, 80], 'Cuarzo': [2, 5, 0],
+            'URLs_Fotos': ['LVA1 | https://raw.githubusercontent.com/usuario/repo/main/foto_lv1.jpg, Plagioclasa | https://drive.google.com/uc?id=12345', '', ''],
+            'Enlace_Reporte': ['https://docs.google.com/', '', '']
+        }
+        df_temp = pd.DataFrame(datos_prueba)
 
-# 3. Fallback: Datos de prueba si no hay nada cargado
-if df is None:
-    st.info("Pega tu enlace de Google Sheets o carga un archivo local para iniciar. Mostrando entorno de prueba.")
-    datos_prueba = {
-        'ID_Muestra': ['CAP-01', 'CAP-02', 'CAP-03'],
-        'Vereda': ['Chapio', 'Quintana', 'Coconuco'],
-        'Latitud': [2.443, 2.450, 2.341], 
-        'Longitud': [-76.606, -76.610, -76.510],
-        'Tamaño_Promedio_mm': [0.5, 0.8, 2.1],
-        'Espesor_Deposito_mm': [10, 5, 2],
-        'Fecha_Recoleccion': ['2026-08-01', '2026-08-05', '2026-08-10'],
-        'LV1': [50, 20, 10], 'LVA1': [28, 15, 5], 'Plagioclasa': [69, 40, 10],
-        'FV1': [20, 50, 80], 'Cuarzo': [2, 5, 0],
-        'URLs_Fotos': ['LVA1 | https://raw.githubusercontent.com/usuario/repo/main/foto_lv1.jpg, Plagioclasa | https://drive.google.com/uc?id=12345', '', ''],
-        'Enlace_Reporte': ['https://docs.google.com/', '', '']
+    # --- MODO A PRUEBA DE BALAS (Corrector de Columnas) ---
+    sinonimos_columnas = {
+        'Lat': 'Latitud', 'LATITUD': 'Latitud', 'lat': 'Latitud',
+        'Lon': 'Longitud', 'LONGITUD': 'Longitud', 'lng': 'Longitud', 'Long': 'Longitud',
+        'Fecha': 'Fecha_Recoleccion', 'fecha': 'Fecha_Recoleccion', 'Date': 'Fecha_Recoleccion',
+        'Tamaño': 'Tamaño_Promedio_mm', 'Tamano': 'Tamaño_Promedio_mm', 'tamano': 'Tamaño_Promedio_mm',
+        'Espesor': 'Espesor_Deposito_mm', 'espesor': 'Espesor_Deposito_mm',
+        'Localidad': 'Vereda', 'Sitio': 'Vereda', 'Muestra': 'ID_Muestra', 'ID': 'ID_Muestra',
+        'Fotos': 'URLs_Fotos', 'Fotos_Url': 'URLs_Fotos',
+        'Reporte': 'Enlace_Reporte'
     }
-    df = pd.DataFrame(datos_prueba)
+    # Renombrar columnas automáticamente si vienen con otros nombres
+    df_temp = df_temp.rename(columns=lambda x: sinonimos_columnas.get(str(x).strip(), x))
+    
+    if 'Fecha_Recoleccion' in df_temp.columns:
+        df_temp['Fecha_Recoleccion'] = pd.to_datetime(df_temp['Fecha_Recoleccion'], errors='coerce')
+        
+    return df_temp
 
-# --- PROCESAMIENTO ---
-if 'Fecha_Recoleccion' in df.columns:
-    df['Fecha_Recoleccion'] = pd.to_datetime(df['Fecha_Recoleccion'], errors='coerce')
+# Llamamos a la función inteligente
+df = cargar_y_limpiar_datos(archivo_subido, url_google_sheets)
 
+# Identificar columnas numéricas (Minerales)
 cols_info = ['ID_Muestra', 'Vereda', 'Latitud', 'Longitud', 'Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'URLs_Fotos', 'URL_Microscopio', 'Fecha_Recoleccion', 'Enlace_Reporte']
 cols_conteo = [col for col in df.columns if col not in cols_info and pd.api.types.is_numeric_dtype(df[col])]
 
@@ -203,7 +214,6 @@ def obtener_nombre_foto(url_original):
     url_limpia = str(url_original).strip()
     if not url_limpia or url_limpia.lower() == "nan":
         return "Foto de Muestra"
-    
     if "|" in url_limpia:
         return url_limpia.split("|")[0].strip()
     
@@ -213,7 +223,6 @@ def obtener_nombre_foto(url_original):
     
     if "drive.google.com" in url_limpia or not nombre_sin_ext:
         return "Archivo Google Drive"
-        
     return nombre_sin_ext
 
 # ==========================================
@@ -227,11 +236,9 @@ else:
     
     with kpi1:
         st.metric("Muestras Analizadas", len(df_filtrado))
-    
     with kpi2:
         espesor_max = df_filtrado['Espesor_Deposito_mm'].max() if 'Espesor_Deposito_mm' in df_filtrado.columns else "N/A"
         st.metric("Espesor Máximo (mm)", f"{espesor_max}")
-        
     with kpi3:
         if not df_filtrado[cols_conteo].empty:
             mineral_dom = df_filtrado[cols_conteo].sum().idxmax()
@@ -335,7 +342,6 @@ else:
                             HeatMap(heat_points, radius=25, blur=15, gradient={0.2: 'blue', 0.5: 'yellow', 1.0: 'red'}).add_to(m)
 
                 folium.LayerControl().add_to(m)
-                        
                 st_folium(m, width="100%", height=550)
 
     # --- PESTAÑA 2: COMPOSICIÓN Y CARRUSEL ---
