@@ -326,35 +326,58 @@ else:
 
         # --- NUEVO: DIAGRAMA TERNARIO ---
         st.subheader("🔺 Diagrama Ternario de Clasificación")
-        st.write("Seleccione los 3 componentes para clasificar las muestras:")
+        st.write("st.markdown("---")
+
+        # --- NUEVO: DIAGRAMA TERNARIO ESTANDARIZADO (V-L-C) ---
+        st.subheader("🔺 Clasificación Petrológica de Cenizas (V-L-C)")
+        st.write("Agrupación estándar en Vidrio (Vitric), Líticos (Lithic) y Cristales (Crystal).")
         
-        col_t1, col_t2, col_t3 = st.columns(3)
-        with col_t1: comp_a = st.selectbox("Vértice Superior (A):", cols_conteo, index=0)
-        with col_t2: comp_b = st.selectbox("Vértice Izquierdo (B):", cols_conteo, index=1 if len(cols_conteo) > 1 else 0)
-        with col_t3: comp_c = st.selectbox("Vértice Derecho (C):", cols_conteo, index=2 if len(cols_conteo) > 2 else 0)
-        
-        # Calcular proporciones relativas solo para los 3 seleccionados
+        # Agrupación inteligente de componentes
+        cols_vidrio = [c for c in cols_conteo if 'FV' in c.upper() or 'VIDRIO' in c.upper()]
+        cols_liticos = [c for c in cols_conteo if 'LV' in c.upper() or 'LÍTICO' in c.upper() or 'LITICO' in c.upper()]
+        # Todo lo que no cumpla las reglas anteriores, se clasifica como cristal
+        cols_cristales = [c for c in cols_conteo if c not in cols_vidrio + cols_liticos]
+
         df_ternary = df_filtrado.copy()
-        df_ternary['Suma_Ternaria'] = df_ternary[comp_a] + df_ternary[comp_b] + df_ternary[comp_c]
-        df_ternary = df_ternary[df_ternary['Suma_Ternaria'] > 0] # Filtrar muestras que tengan al menos uno
+        df_ternary['Vidrio'] = df_ternary[cols_vidrio].sum(axis=1) if cols_vidrio else 0
+        df_ternary['Líticos'] = df_ternary[cols_liticos].sum(axis=1) if cols_liticos else 0
+        df_ternary['Cristales'] = df_ternary[cols_cristales].sum(axis=1) if cols_cristales else 0
         
-        if not df_ternary.empty:
-            df_ternary[comp_a] = df_ternary[comp_a] / df_ternary['Suma_Ternaria'] * 100
-            df_ternary[comp_b] = df_ternary[comp_b] / df_ternary['Suma_Ternaria'] * 100
-            df_ternary[comp_c] = df_ternary[comp_c] / df_ternary['Suma_Ternaria'] * 100
+        df_ternary['Suma_VLC'] = df_ternary['Vidrio'] + df_ternary['Líticos'] + df_ternary['Cristales']
+        df_ternary_plot = df_ternary[df_ternary['Suma_VLC'] > 0].copy()
+        
+        if not df_ternary_plot.empty:
+            df_ternary_plot['Vidrio (%)'] = df_ternary_plot['Vidrio'] / df_ternary_plot['Suma_VLC'] * 100
+            df_ternary_plot['Líticos (%)'] = df_ternary_plot['Líticos'] / df_ternary_plot['Suma_VLC'] * 100
+            df_ternary_plot['Cristales (%)'] = df_ternary_plot['Cristales'] / df_ternary_plot['Suma_VLC'] * 100
             
             fig_ternary = px.scatter_ternary(
-                df_ternary, a=comp_a, b=comp_b, c=comp_c, 
+                df_ternary_plot, a='Vidrio (%)', b='Líticos (%)', c='Cristales (%)', 
                 color="Vereda", hover_name="ID_Muestra", size="Tamaño_Promedio_mm",
                 color_discrete_sequence=colores_profesionales,
-                title="Clasificación Composicional Relativa"
+            )
+            
+            # Mejorar la visualización del triángulo
+            fig_ternary.update_layout(
+                ternary=dict(
+                    sum=100,
+                    aaxis=dict(title='Vidrio (Vitric) %', min=0, linewidth=2, ticks='outside'),
+                    baxis=dict(title='Líticos (Lithic) %', min=0, linewidth=2, ticks='outside'),
+                    caxis=dict(title='Cristales (Crystal) %', min=0, linewidth=2, ticks='outside')
+                ),
+                margin=dict(t=40, b=40, l=40, r=40)
             )
             st.plotly_chart(fig_ternary, use_container_width=True)
+            
+            # Acordeón para transparencia científica
+            with st.expander("🔍 Ver detalle de la agrupación"):
+                st.write(f"**Vidrio:** {', '.join(cols_vidrio) if cols_vidrio else 'Ninguno detectado'}")
+                st.write(f"**Líticos:** {', '.join(cols_liticos) if cols_liticos else 'Ninguno detectado'}")
+                st.write(f"**Cristales:** {', '.join(cols_cristales) if cols_cristales else 'Ninguno detectado'}")
         else:
-            st.info("Ninguna de las muestras actuales contiene los componentes seleccionados.")
+            st.info("No hay datos suficientes para clasificar las muestras en el diagrama V-L-C.")
 
         st.markdown("---")
-
         # --- NUEVO: LÍNEA DE TIEMPO DEL TAMAÑO DE GRANO ---
         st.subheader("📈 Evolución Temporal del Tamaño de Grano")
         if 'Fecha_Recoleccion' in df_filtrado.columns and 'Tamaño_Promedio_mm' in df_filtrado.columns:
