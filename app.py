@@ -229,10 +229,8 @@ def renderizar_kpis(df_fil, cols_conteo):
 
 def renderizar_modulo_espacial(df_fil, archivo_geo):
     try:
-        st.subheader("Cartografía y Modelamiento Matemático")
-        
-        # 1. Recuperamos la opción original de las Isopletas
-        tipo_mapa = st.radio("Seleccione la vista principal:", ["📍 Puntos (2D)", "🔥 Calor (2D)", "🌋 Vista 3D (Volumen)", "🎯 Isopacas (Espesor)", "🪨 Isopletas (Tamaño de Grano)"], horizontal=True)
+        st.subheader("Cartografía y Modelamiento Matemático/Predictivo")
+        tipo_mapa = st.radio("Seleccione la vista espacial:", ["📍 Puntos (2D)", "🔥 Calor (2D)", "🌋 Vista 3D (Volumen)", "🎯 Isopacas Reales (Espesor)", "🪨 Isopletas Reales (Tamaño)", "🤖 IA: Predicción (Random Forest)"], horizontal=True)
         
         metodo_interp = 'RBF (Recomendado)'
         resolucion = 200
@@ -247,9 +245,38 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
         
         c_lat, c_lon = df_mapa['Latitud'].mean(), df_mapa['Longitud'].mean()
 
-        if "3D" in tipo_mapa:
+        if "IA: Predicción" in tipo_mapa:
+            if not ML_DISPONIBLE: return st.error("⚠️ La librería scikit-learn no está instalada. Añádela al requirements.txt")
+            
+            st.info("🧠 **Red Neuronal / Random Forest:** La IA ha aprendido de tus muestras y está simulando el espesor de la ceniza en zonas donde no hay datos de campo.")
+            df_ml = df_mapa.dropna(subset=['Espesor_Deposito_mm', 'Distancia_Crater_km']).copy()
+            if len(df_ml) < 4: return st.warning("Se requieren al menos 4 muestras para entrenar la Inteligencia Artificial.")
+            
+            X = df_ml[['Latitud', 'Longitud', 'Distancia_Crater_km']]
+            y = df_ml['Espesor_Deposito_mm']
+            
+            modelo_rf = RandomForestRegressor(n_estimators=100, random_state=42)
+            modelo_rf.fit(X, y)
+            
+            lon_min, lon_max = df_ml['Longitud'].min() - 0.05, df_ml['Longitud'].max() + 0.05
+            lat_min, lat_max = df_ml['Latitud'].min() - 0.05, df_ml['Latitud'].max() + 0.05
+            grid_lon, grid_lat = np.mgrid[lon_min:lon_max:100j, lat_min:lat_max:100j]
+            
+            distancias_grid, _ = operaciones_geoespaciales_vectorizadas(grid_lat.flatten(), grid_lon.flatten())
+            X_pred = pd.DataFrame({'Latitud': grid_lat.flatten(), 'Longitud': grid_lon.flatten(), 'Distancia_Crater_km': distancias_grid})
+            
+            predicciones = modelo_rf.predict(X_pred)
+            grid_z_rf = predicciones.reshape(grid_lon.shape)
+            
+            fig_rf = go.Figure(data=go.Contour(z=grid_z_rf.T, x=grid_lon[:,0], y=grid_lat[0,:], colorscale='Reds', contours=dict(showlabels=True), name="Espesor Previsto"))
+            fig_rf.add_trace(go.Scatter(x=df_ml['Longitud'], y=df_ml['Latitud'], mode='markers', marker=dict(color='black', symbol='x', size=8), name='Datos de Entrenamiento'))
+            fig_rf.add_trace(go.Scatter(x=[LON_CRATER], y=[LAT_CRATER], mode='markers', marker=dict(color='red', symbol='triangle-up', size=14), name='Cráter'))
+            fig_rf.update_layout(height=600, xaxis_title="Longitud", yaxis_title="Latitud", plot_bgcolor='#FAFAFA')
+            st.plotly_chart(fig_rf, use_container_width=True)
+
+        elif "3D" in tipo_mapa:
             df_3d = df_mapa.dropna(subset=['Espesor_Deposito_mm']).copy()
-            if df_3d.empty: return st.warning("Sin datos de 'Espesor_Deposito_mm' para construir 3D.")
+            if df_3d.empty: return st.warning("Sin datos de espesor para construir 3D.")
             df_3d['Elev_V'] = df_3d['Espesor_Deposito_mm'] * 150 
             capa = pdk.Layer('ColumnLayer', data=df_3d, get_position='[Longitud, Latitud]', get_elevation='Elev_V', radius=150, get_fill_color='[200, 30, 30, 180]', pickable=True, auto_highlight=True)
             crater_layer = pdk.Layer('ScatterplotLayer', data=[{'lat': LAT_CRATER, 'lon': LON_CRATER}], get_position='[lon, lat]', get_color='[255, 0, 0, 255]', get_radius=500, pickable=True)
@@ -259,15 +286,13 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
         else:
             m = folium.Map(location=[c_lat, c_lon], zoom_start=11, tiles='CartoDB positron')
             folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', attr='Esri', overlay=False).add_to(m)
-            folium.TileLayer('https://services.arcgis.com/WMSServer', attr='SGC', name='Amenaza (SGC)', overlay=True, opacity=0.7).add_to(m)
             folium.Marker([LAT_CRATER, LON_CRATER], tooltip="🌋 Cráter Volcán Puracé", icon=folium.Icon(color="red", icon="fire")).add_to(m)
-
             if archivo_geo: folium.GeoJson(json.load(archivo_geo), style_function=lambda f: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5, 'fillOpacity': 0.15}).add_to(m)
             
             if "Puntos" in tipo_mapa:
                 mc = MarkerCluster().add_to(m)
                 for _, r in df_mapa.iterrows():
-                    html = f"<b>{r.get('ID_Muestra', 'N/A')}</b><br>Vereda: {r.get('Vereda', 'N/A')}<br>Espesor: {r.get('Espesor_Deposito_mm', 0)} mm<br>Distancia Cráter: {r.get('Distancia_Crater_km', 0)} km"
+                    html = f"<b>{r.get('ID_Muestra', 'N/A')}</b><br>Espesor: {r.get('Espesor_Deposito_mm', 0)} mm<br>Distancia: {r.get('Distancia_Crater_km', 0)} km"
                     folium.Marker([r['Latitud'], r['Longitud']], popup=folium.Popup(html, max_width=250), tooltip=str(r.get('ID_Muestra', '')), icon=folium.Icon(color="darkblue", icon="info-sign")).add_to(mc)
             
             elif "Calor" in tipo_mapa:
@@ -279,8 +304,7 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                 df_mod = df_mapa.dropna(subset=['Latitud', 'Longitud', col_obj]).copy()
                 df_mod = df_mod.groupby(['Latitud', 'Longitud'], as_index=False).agg({col_obj: 'max', 'ID_Muestra': 'first'})
                 
-                if len(df_mod) < 4:
-                    st.warning(f"⚠️ Se requieren al menos 4 puntos (coordenadas distintas) para generar el modelo de {col_obj}.")
+                if len(df_mod) < 4: st.warning(f"⚠️ Se requieren al menos 4 puntos para {col_obj}.")
                 else:
                     lon, lat, z = df_mod['Longitud'].values, df_mod['Latitud'].values, df_mod[col_obj].values
                     grid_lon, grid_lat, grid_z, l_lon_min, l_lon_max, l_lat_min, l_lat_max = calcular_modelo_espacial(lon, lat, z, metodo_interp, resolucion)
@@ -299,56 +323,78 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                     plt.close(fig); buf.close()
 
                     folium.raster_layers.ImageOverlay(image=img_url, bounds=[[l_lat_min, l_lon_min], [l_lat_max, l_lon_max]], opacity=0.8).add_to(m)
-                    for _, r in df_mod.iterrows(): folium.CircleMarker([r['Latitud'], r['Longitud']], radius=3, color="black", fill=True, popup=f"{r[col_obj]}").add_to(m)
+                    for _, r in df_mod.iterrows(): folium.CircleMarker([r['Latitud'], r['Longitud']], radius=3, color="black", fill=True).add_to(m)
 
-                    min_val, max_val = float(grid_z.min()), float(grid_z.max())
-                    if "Isopacas" in tipo_mapa:
-                        colormap = cm.LinearColormap(colors=['#FEE0D2', '#FC9272', '#DE2D26', '#99000D'], vmin=min_val, vmax=max_val)
-                        colormap.caption = 'Espesor del Depósito (mm)'
-                    else:
-                        colormap = cm.LinearColormap(colors=['#440154', '#31688E', '#35B779', '#FDE725'], vmin=min_val, vmax=max_val)
-                        colormap.caption = 'Tamaño Promedio de Grano (mm)'
+                    colormap = cm.LinearColormap(colors=['#FEE0D2', '#FC9272', '#DE2D26', '#99000D'] if "Isopacas" in tipo_mapa else ['#440154', '#31688E', '#35B779', '#FDE725'], vmin=float(grid_z.min()), vmax=float(grid_z.max()))
+                    colormap.caption = f"{col_obj} (mm)"
                     m.add_child(colormap)
 
             folium.LayerControl().add_to(m)
             st_folium(m, width="100%", height=600)
 
-        # 2. La IA pasa a estar DEBAJO del mapa principal, a solicitud tuya.
-        st.markdown("---")
-        st.subheader("🤖 Simulación Predictiva (Inteligencia Artificial)")
-        st.write("Entrena una red de Machine Learning (Random Forest) para predecir la caída de ceniza en zonas sin muestreo y compárala visualmente con la realidad.")
-        
-        if st.checkbox("Generar Mapa Predictivo con IA"):
-            if not ML_DISPONIBLE: 
-                st.error("⚠️ La librería scikit-learn no está instalada. Añádela al requirements.txt en GitHub.")
-            else:
-                df_ml = df_mapa.dropna(subset=['Espesor_Deposito_mm', 'Distancia_Crater_km']).copy()
-                if len(df_ml) < 4: 
-                    st.warning("Se requieren al menos 4 muestras para entrenar la Inteligencia Artificial.")
-                else:
-                    X = df_ml[['Latitud', 'Longitud', 'Distancia_Crater_km']]
-                    y = df_ml['Espesor_Deposito_mm']
-                    
-                    modelo_rf = RandomForestRegressor(n_estimators=100, random_state=42)
-                    modelo_rf.fit(X, y)
-                    
-                    lon_min, lon_max = df_ml['Longitud'].min() - 0.05, df_ml['Longitud'].max() + 0.05
-                    lat_min, lat_max = df_ml['Latitud'].min() - 0.05, df_ml['Latitud'].max() + 0.05
-                    grid_lon, grid_lat = np.mgrid[lon_min:lon_max:100j, lat_min:lat_max:100j]
-                    
-                    distancias_grid, _ = operaciones_geoespaciales_vectorizadas(grid_lat.flatten(), grid_lon.flatten())
-                    X_pred = pd.DataFrame({'Latitud': grid_lat.flatten(), 'Longitud': grid_lon.flatten(), 'Distancia_Crater_km': distancias_grid})
-                    
-                    predicciones = modelo_rf.predict(X_pred)
-                    grid_z_rf = predicciones.reshape(grid_lon.shape)
-                    
-                    fig_rf = go.Figure(data=go.Contour(z=grid_z_rf.T, x=grid_lon[:,0], y=grid_lat[0,:], colorscale='Reds', contours=dict(showlabels=True), name="Espesor Previsto"))
-                    fig_rf.add_trace(go.Scatter(x=df_ml['Longitud'], y=df_ml['Latitud'], mode='markers', marker=dict(color='black', symbol='x', size=8), name='Datos de Entrenamiento'))
-                    fig_rf.add_trace(go.Scatter(x=[LON_CRATER], y=[LAT_CRATER], mode='markers', marker=dict(color='red', symbol='triangle-up', size=14), name='Cráter'))
-                    fig_rf.update_layout(height=600, xaxis_title="Longitud", yaxis_title="Latitud", plot_bgcolor='#FAFAFA')
-                    st.plotly_chart(fig_rf, use_container_width=True)
-
     except Exception as e: st.error(f"⚠️ Error al renderizar el módulo espacial: {e}")
+
+# ==========================================
+# NUEVO: MÓDULO COMPARATIVO MULTI-MUESTRA
+# ==========================================
+def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_conteo):
+    try:
+        st.subheader("⚖️ Análisis Comparativo Multi-Muestra")
+        st.write("Filtra y selecciona múltiples muestras para comparar su composición mineralógica y espacial simultáneamente.")
+
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            veredas_disponibles = sorted(df_fil['Vereda'].dropna().unique().tolist())
+            filtro_v = st.multiselect("Filtrar opciones por Vereda:", veredas_disponibles, default=[])
+        with col_f2:
+            if 'Fecha_Recoleccion' in df_fil.columns and not df_fil['Fecha_Recoleccion'].dropna().empty:
+                fechas_disponibles = sorted(df_fil['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d').dropna().unique().tolist(), reverse=True)
+                filtro_f = st.multiselect("Filtrar opciones por Fecha:", fechas_disponibles, default=[])
+            else:
+                filtro_f = []
+
+        # Aplicar filtros locales para las opciones del multiselect
+        df_opciones = df_fil.copy()
+        if filtro_v:
+            df_opciones = df_opciones[df_opciones['Vereda'].isin(filtro_v)]
+        if filtro_f and 'Fecha_Recoleccion' in df_opciones.columns:
+            df_opciones = df_opciones[df_opciones['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d').isin(filtro_f)]
+
+        muestras_disponibles = df_opciones['ID_Muestra'].tolist()
+        
+        muestras_seleccionadas = st.multiselect(
+            "Seleccione las muestras a comparar (Recomendado: 2 a 10):", 
+            muestras_disponibles, 
+            default=muestras_disponibles[:3] if len(muestras_disponibles) >= 3 else muestras_disponibles
+        )
+
+        if not muestras_seleccionadas:
+            return st.info("Seleccione al menos una muestra para iniciar la comparativa.")
+
+        st.markdown("---")
+        
+        st.subheader("📊 Comparativa de Distribución Mineralógica")
+        df_comp_pct = df_pct_fil[df_pct_fil['ID_Muestra'].isin(muestras_seleccionadas)].copy()
+        
+        df_melted = df_comp_pct.melt(id_vars=['ID_Muestra'], value_vars=cols_conteo, var_name='Componente', value_name='Porcentaje')
+        df_melted = df_melted[df_melted['Porcentaje'] > 0] 
+        
+        fig_bar = px.bar(df_melted, x="ID_Muestra", y="Porcentaje", color="Componente", text="Porcentaje", color_discrete_map=color_map_oficial, barmode="stack")
+        fig_bar.update_traces(texttemplate='%{text:.1f}%', textposition='inside')
+        fig_bar.update_layout(xaxis_title="ID de Muestra", yaxis_title="Porcentaje (%)", legend_title="Mineral", height=450)
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("📏 Comparativa Físico-Espacial (Tabla Resumen)")
+        cols_fisicas = ['ID_Muestra', 'Vereda', 'Fecha_Recoleccion', 'Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'Distancia_Crater_km', 'Nivel_Riesgo']
+        df_fisico = df_fil[df_fil['ID_Muestra'].isin(muestras_seleccionadas)][[c for c in cols_fisicas if c in df_fil.columns]].copy()
+        if 'Fecha_Recoleccion' in df_fisico.columns:
+            df_fisico['Fecha_Recoleccion'] = df_fisico['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d')
+        
+        st.dataframe(df_fisico, hide_index=True, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"⚠️ Error renderizando el módulo comparativo: {e}")
 
 def generar_pdf_reporte(m_sel, vereda, fecha, espesor, tamano, riesgo, df_graf):
     pdf = FPDF()
@@ -412,7 +458,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, fotos_subidas
             st.markdown(f"""
             <div style="background-color:#EBF5FB; padding:10px 14px; border-radius:8px; margin-top:10px; font-size: 13px; border-left: 5px solid #2980B9; color:#1C2833; white-space: nowrap; overflow-x: auto;">
                 📋 <b>Vereda:</b> {d_crudo.get('Vereda','N/A')} &nbsp;|&nbsp; 📅 <b>Fecha:</b> {f_val} &nbsp;|&nbsp; 📏 <b>Tamaño:</b> {d_crudo.get('Tamaño_Promedio_mm',0)} mm &nbsp;|&nbsp; 🔥 <b>Espesor:</b> {d_crudo.get('Espesor_Deposito_mm',0)} mm<br>
-                🚨 <b>Alerta:</b> {d_crudo.get('Nivel_Riesgo', 'N/A')} &nbsp;|&nbsp; 🧭 <b>Viento:</b> {d_crudo.get('Direccion_Viento', 'N/A')}
+                🚨 <b>Alerta:</b> {d_crudo.get('Nivel_Riesgo', 'N/A')} &nbsp;|&nbsp; 🧭 <b>Viento Histórico:</b> {d_crudo.get('Direccion_Viento', 'N/A')}
             </div>""", unsafe_allow_html=True)
             
             if PDF_DISPONIBLE:
@@ -459,7 +505,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, fotos_subidas
             df_tp = df_t[df_t['Suma'] > 0].copy()
             if not df_tp.empty:
                 df_tp['V%'], df_tp['L%'], df_tp['C%'] = df_tp['Vidrio']/df_tp['Suma']*100, df_tp['Líticos']/df_tp['Suma']*100, df_tp['Cristales']/df_tp['Suma']*100
-                fig_t = px.scatter_ternary(df_tp, a='V%', b='L%', c='C%', color="Nivel_Riesgo", hover_name="ID_Muestra", size="Tamaño_Promedio_mm", title="Clasificación Petrológica")
+                fig_t = px.scatter_ternary(df_tp, a='V%', b='L%', c='C%', color="Nivel_Riesgo", hover_name="ID_Muestra", size="Tamaño_Promedio_mm", title="Clasificación Petrológica (V-L-C)")
                 fig_t.update_layout(ternary=dict(aaxis_title='Vidrio %', baxis_title='Líticos %', caxis_title='Cristales %'), margin=dict(t=40,b=40,l=40,r=40))
                 st.plotly_chart(fig_t, use_container_width=True)
 
@@ -584,8 +630,14 @@ else:
     
     renderizar_kpis(df_fil, c_conteo)
     
-    t_espacial, t_laboratorio, t_operativo = st.tabs(["🌍 Módulo Espacial (Mapas)", "🔬 Módulo de Laboratorio (IA y Química)", "🗃️ Módulo Operativo (Riesgos)"])
+    t_espacial, t_laboratorio, t_comparativo, t_operativo = st.tabs([
+        "🌍 Módulo Espacial (Mapas)", 
+        "🔬 Módulo de Laboratorio (IA y Química)", 
+        "⚖️ Módulo Comparativo (Multi-Muestra)",
+        "🗃️ Módulo Operativo (Riesgos)"
+    ])
     
     with t_espacial: renderizar_modulo_espacial(df_fil, a_geo)
     with t_laboratorio: renderizar_modulo_laboratorio(df_fil, df_pct_fil, c_conteo, fotos_subidas)
+    with t_comparativo: renderizar_modulo_comparativo(df_fil, df_pct_fil, c_conteo)
     with t_operativo: renderizar_modulo_operativo(df_fil)
