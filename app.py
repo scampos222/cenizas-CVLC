@@ -72,7 +72,7 @@ else:
         'Fecha_Recoleccion': ['2026-08-01', '2026-08-05', '2026-08-10'],
         'LV1': [50, 20, 10], 'LVA1': [28, 15, 5], 'Plagioclasa': [69, 40, 10],
         'FV1': [20, 50, 80], 'Cuarzo': [2, 5, 0],
-        'URLs_Fotos': ['https://raw.githubusercontent.com/usuario/repo/main/foto_plagioclasa.jpg, https://raw.githubusercontent.com/usuario/repo/main/foto_lv1.jpg', '', ''],
+        'URLs_Fotos': ['LVA1 | https://raw.githubusercontent.com/usuario/repo/main/foto_lv1.jpg, Plagioclasa | https://drive.google.com/uc?id=12345', '', ''],
         'Enlace_Reporte': ['https://docs.google.com/', '', '']
     }
     df = pd.DataFrame(datos_prueba)
@@ -153,6 +153,10 @@ with st.sidebar.expander("📥 Exportar Datos", expanded=False):
 # --- FUNCIONES DE IMAGEN ---
 def obtener_url_imagen(url_original):
     url_limpia = str(url_original).strip()
+    # Si usamos el truco del nombre en el Excel (Nombre | Enlace)
+    if "|" in url_limpia:
+        url_limpia = url_limpia.split("|")[1].strip()
+        
     if "drive.google.com" in url_limpia:
         match = re.search(r'[-\w]{25,}', url_limpia)
         if match:
@@ -163,18 +167,21 @@ def obtener_url_imagen(url_original):
 def obtener_nombre_foto(url_original):
     url_limpia = str(url_original).strip()
     if not url_limpia or url_limpia.lower() == "nan":
-        return "Foto sin nombre"
+        return "Foto de Muestra"
     
-    # Si viene de Google Drive extraemos el ID para identificarla
-    if "drive.google.com" in url_limpia:
-        match = re.search(r'[-\w]{25,}', url_limpia)
-        if match:
-            return f"Archivo Drive (ID: ...{match.group(0)[-6:]})"
+    # Si el usuario puso el nombre en el Excel con una barra vertical
+    if "|" in url_limpia:
+        return url_limpia.split("|")[0].strip()
     
-    # Para GitHub u otros servidores directos, extraemos el nombre del archivo
+    # Si es GitHub u otro link, extraemos el nombre del archivo sin extensión (.jpg)
     path = urlparse(url_limpia).path
     nombre_archivo = os.path.basename(unquote(path))
-    return nombre_archivo if nombre_archivo else "Fotografía Muestra"
+    nombre_sin_ext = os.path.splitext(nombre_archivo)[0]
+    
+    if "drive.google.com" in url_limpia or not nombre_sin_ext:
+        return "Archivo Google Drive"
+        
+    return nombre_sin_ext
 
 # ==========================================
 # 4. DASHBOARD PRINCIPAL
@@ -264,14 +271,13 @@ else:
                     control=True
                 ).add_to(m)
 
-                url_wms_sgc = 'https://srvags.sgc.gov.co/arcgis/services/Amenaza_Volcanica/Amenaza_Volcanica/MapServer/WMSServer' 
-                
-                folium.raster_layers.WmsTileLayer(
-                    url=url_wms_sgc,
-                    layers='0',
-                    name='Amenaza Volcánica (SGC)',
-                    fmt='image/png',
-                    transparent=True,
+                url_arcgis_layer = 'https://services.arcgis.com/WMSServer' 
+                folium.TileLayer(
+                    tiles='https://server.arcgisonline.com/ArcGIS/rest/services/Specialty/DeLorme_World_Base_Map/MapServer/tile/{z}/{y}/{x}',
+                    attr='ArcGIS Online',
+                    name='Mapa Geológico / Amenaza (ArcGIS)',
+                    overlay=True,
+                    opacity=0.7,
                     control=True
                 ).add_to(m)
                 
@@ -294,8 +300,6 @@ else:
                         if not heat_data.empty:
                             heat_points = [[row['Latitud'], row['Longitud'], float(row['Espesor_Deposito_mm']) * 2] for index, row in heat_data.iterrows()]
                             HeatMap(heat_points, radius=25, blur=15, gradient={0.2: 'blue', 0.5: 'yellow', 1.0: 'red'}).add_to(m)
-                    else:
-                        st.warning("Falta la columna 'Espesor_Deposito_mm' en tu base de datos.")
 
                 folium.LayerControl().add_to(m)
                         
@@ -307,11 +311,9 @@ else:
         
         lista_muestras = df_filtrado["ID_Muestra"].tolist()
         
-        # Inicializar índice de muestra en session_state si no existe
         if "idx_muestra_actual" not in st.session_state or st.session_state["idx_muestra_actual"] >= len(lista_muestras):
             st.session_state["idx_muestra_actual"] = 0
 
-        # AJUSTE 1: BOTONES PARA NAVEGAR ENTRE MUESTRAS
         col_m_prev, col_m_select, col_m_next = st.columns([1, 3, 1])
         
         with col_m_prev:
@@ -331,26 +333,10 @@ else:
                 index=st.session_state["idx_muestra_actual"],
                 key="select_muestra_main"
             )
-            # Sincronizar el selectbox con el índice
             st.session_state["idx_muestra_actual"] = lista_muestras.index(muestra_sel)
 
-        # AJUSTE 2: DETALLES DE LA MUESTRA EN UN CUADRO INFORMATIVO
         datos_m_crudos = df_filtrado[df_filtrado["ID_Muestra"] == muestra_sel].iloc[0]
         
-        vereda_val = datos_m_crudos.get('Vereda', 'N/A')
-        
-        if 'Fecha_Recoleccion' in datos_m_crudos and pd.notna(datos_m_crudos['Fecha_Recoleccion']):
-            fecha_val = pd.to_datetime(datos_m_crudos['Fecha_Recoleccion']).strftime('%Y-%m-%d')
-        else:
-            fecha_val = 'N/A'
-            
-        tamano_val = f"{datos_m_crudos.get('Tamaño_Promedio_mm', 'N/A')} mm"
-        espesor_val = f"{datos_m_crudos.get('Espesor_Deposito_mm', 'N/A')} mm"
-        total_granos_val = datos_m_crudos.get('Total_Granos', 'N/A')
-
-        st.info(f"📋 **Detalles de la Muestra:** Vereda: **{vereda_val}** | Fecha Recolección: **{fecha_val}** | Tamaño Promedio: **{tamano_val}** | Espesor Depósito: **{espesor_val}** | Total Granos: **{total_granos_val}**")
-
-        # CONTINUACIÓN: DIBUJO DE LA TORTA Y CARRUSEL
         datos_muestra_pct = df_pct_filtrado[df_pct_filtrado["ID_Muestra"] == muestra_sel][cols_conteo].iloc[0]
         datos_grafica = datos_muestra_pct[datos_muestra_pct > 0].reset_index()
         datos_grafica.columns = ["Componente", "Porcentaje"]
@@ -369,6 +355,22 @@ else:
             eventos_grafica = st.plotly_chart(fig_pie, use_container_width=True, on_select="rerun", key=f"pie_{muestra_sel}")
             if eventos_grafica and "selection" in eventos_grafica and eventos_grafica["selection"]["points"]:
                 mineral_cliqueado = eventos_grafica["selection"]["points"][0]["label"]
+
+            # --- NUEVO: DETALLES MOVIDOS DEBAJO DE LA TORTA ---
+            vereda_val = datos_m_crudos.get('Vereda', 'N/A')
+            fecha_val = pd.to_datetime(datos_m_crudos['Fecha_Recoleccion']).strftime('%Y-%m-%d') if 'Fecha_Recoleccion' in datos_m_crudos and pd.notna(datos_m_crudos['Fecha_Recoleccion']) else 'N/A'
+            tamano_val = f"{datos_m_crudos.get('Tamaño_Promedio_mm', 'N/A')} mm"
+            espesor_val = f"{datos_m_crudos.get('Espesor_Deposito_mm', 'N/A')} mm"
+            total_granos_val = datos_m_crudos.get('Total_Granos', 'N/A')
+
+            st.markdown(f"""
+            <div style="background-color:#EBF5FB; padding:15px; border-radius:10px; margin-top:10px; font-size: 14.5px; border-left: 5px solid #2980B9;">
+                <b style="color:#2C3E50; font-size:16px;">📋 Detalles de Campo</b><br><br>
+                <b>📍 Vereda:</b> {vereda_val} &nbsp;&nbsp;|&nbsp;&nbsp; <b>📅 Fecha:</b> {fecha_val}<br>
+                <b>📏 Tamaño:</b> {tamano_val} &nbsp;&nbsp;|&nbsp;&nbsp; <b>🔥 Espesor:</b> {espesor_val}<br>
+                <b>🔬 Total Granos:</b> {total_granos_val}
+            </div>
+            """, unsafe_allow_html=True)
 
         with col_foto:
             if "URLs_Fotos" in datos_m_crudos and pd.notna(datos_m_crudos["URLs_Fotos"]):
@@ -398,8 +400,6 @@ else:
                             st.session_state[clave_estado] = (st.session_state[clave_estado] + 1) % len(urls_limpias)
 
                     url_actual = urls_limpias[st.session_state[clave_estado]]
-                    
-                    # AJUSTE 3: EXTRAER Y MOSTRAR EL NOMBRE DE LA FOTO EN LA PARTE INFERIOR
                     nombre_foto = obtener_nombre_foto(url_actual)
                     
                     st.image(obtener_url_imagen(url_actual), caption=f"Muestra {muestra_sel} | {nombre_foto}", use_container_width=True)
