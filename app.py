@@ -247,18 +247,20 @@ else:
                     control=True
                 ).add_to(m)
 
-                # Capa 2: Mapa Amenaza SGC
-                url_servicio_arcgis = 'https://www.arcgis.com/apps/mapviewer/index.html?layerId=11&layers=4b9486b0257f475bbe3f0b8754ebd122' 
-                
-                if url_servicio_arcgis != 'https://www.arcgis.com/apps/mapviewer/index.html?layerId=11&layers=4b9486b0257f475bbe3f0b8754ebd122':
-                    folium.raster_layers.WmsTileLayer(
-                        url=f"{url_servicio_arcgis}/WMSServer",
-                        layers='0',
-                        name='Mapa de Amenaza Oficial',
-                        fmt='image/png',
-                        transparent=True,
-                        control=True
-                    ).add_to(m)
+                # --- CAPA 2: MAPA DE AMENAZA (SGC OFICIAL) ---
+            url_wms_sgc = 'https://srvags.sgc.gov.co/arcgis/services/Amenaza_Volcanica/Amenaza_Volcanica/MapServer/WMSServer' 
+            
+            folium.raster_layers.WmsTileLayer(
+                url=url_wms_sgc,
+                layers='0', # Capa principal de amenaza del servidor SGC
+                name='Amenaza Volcánica (SGC)',
+                fmt='image/png',
+                transparent=True,
+                control=True
+            ).add_to(m)
+
+            # Control para encender o apagar las capas (SIEMPRE AL FINAL)
+            folium.LayerControl().add_to(m)
                 
                 # Capa 3: GeoJSON Veredas
                 if archivo_geojson is not None:
