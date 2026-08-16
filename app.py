@@ -195,7 +195,7 @@ else:
         )
         st.markdown("---")
         
-        # 1. Blindaje: Filtramos datos válidos de latitud y longitud para evitar que Folium colapse
+        # Filtrar datos válidos de latitud y longitud para evitar que Folium colapse
         df_mapa = df_filtrado.dropna(subset=['Latitud', 'Longitud']).copy()
         
         if df_mapa.empty:
@@ -247,20 +247,17 @@ else:
                     control=True
                 ).add_to(m)
 
-                # --- CAPA 2: MAPA DE AMENAZA (SGC OFICIAL) ---
-            url_wms_sgc = 'https://srvags.sgc.gov.co/arcgis/services/Amenaza_Volcanica/Amenaza_Volcanica/MapServer/WMSServer' 
-            
-            folium.raster_layers.WmsTileLayer(
-                url=url_wms_sgc,
-                layers='0', # Capa principal de amenaza del servidor SGC
-                name='Amenaza Volcánica (SGC)',
-                fmt='image/png',
-                transparent=True,
-                control=True
-            ).add_to(m)
-
-            # Control para encender o apagar las capas (SIEMPRE AL FINAL)
-            folium.LayerControl().add_to(m)
+                # Capa 2: Mapa Amenaza SGC
+                url_wms_sgc = 'https://srvags.sgc.gov.co/arcgis/services/Amenaza_Volcanica/Amenaza_Volcanica/MapServer/WMSServer' 
+                
+                folium.raster_layers.WmsTileLayer(
+                    url=url_wms_sgc,
+                    layers='0',
+                    name='Amenaza Volcánica (SGC)',
+                    fmt='image/png',
+                    transparent=True,
+                    control=True
+                ).add_to(m)
                 
                 # Capa 3: GeoJSON Veredas
                 if archivo_geojson is not None:
@@ -286,7 +283,7 @@ else:
                     else:
                         st.warning("Falta la columna 'Espesor_Deposito_mm' en tu base de datos.")
 
-                # 2. Corrección: El menú de capas SIEMPRE se debe agregar al final de todo
+                # Control para encender o apagar las capas (SIEMPRE AL FINAL)
                 folium.LayerControl().add_to(m)
                         
                 st_folium(m, width="100%", height=550)
