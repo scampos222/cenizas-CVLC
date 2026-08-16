@@ -6,6 +6,7 @@ from folium.plugins import MarkerCluster, HeatMap
 from streamlit_folium import st_folium
 import re
 import json
+import pydeck as pdk # NUEVA LIBRERÍA PARA MAPAS 3D
 
 # 1. CONFIGURACIÓN INSTITUCIONAL
 st.set_page_config(page_title="AshViewer-CVLC", layout="wide")
@@ -28,9 +29,8 @@ st.markdown("""
 st.title("AshViewer-CVLC | Plataforma de Análisis de Cenizas Volcánicas")
 
 # ==========================================
-# PALETA DE COLORES GEOLÓGICA (NUEVO)
+# PALETA DE COLORES GEOLÓGICA
 # ==========================================
-# Colores fijos para que los minerales siempre se vean igual en todas las gráficas
 color_map_oficial = {
     "LV1": "#555555",          # Lítico (Gris Oscuro)
     "LVA1": "#8B4513",         # Lítico Alterado (Marrón)
@@ -40,7 +40,7 @@ color_map_oficial = {
     "Epidotas": "#9ACD32",     # Alteración (Verde)
     "Otros_Cristales": "#9370DB" # Otros (Morado)
 }
-colores_profesionales = px.colors.qualitative.Pastel # Para variables como Veredas
+colores_profesionales = px.colors.qualitative.Pastel
 
 # ==========================================
 # 2. CARGA DE DATOS Y PANEL LATERAL
@@ -143,7 +143,6 @@ mask_vereda = df['Vereda'].isin(veredas_seleccionadas) if veredas_seleccionadas 
 df_filtrado = df[mask_vereda & mask_fecha]
 df_pct_filtrado = df_pct[mask_vereda & mask_fecha]
 
-# --- NUEVO: BOTÓN DE EXPORTACIÓN ---
 with st.sidebar.expander("📥 Exportar Datos", expanded=False):
     st.write("Descarga los datos con los filtros actuales.")
     csv_export = df_filtrado.to_csv(index=False).encode('utf-8')
@@ -163,7 +162,6 @@ def obtener_url_imagen(url_original):
 if df_filtrado.empty:
     st.warning("No se encontraron registros bajo los parámetros seleccionados.")
 else:
-    # --- NUEVO: TARJETAS EJECUTIVAS (KPIs) ---
     st.subheader("📊 Resumen Ejecutivo")
     kpi1, kpi2, kpi3 = st.columns(3)
     
@@ -183,42 +181,86 @@ else:
 
     st.markdown("---")
     
-    # --- NUEVO: 6 PESTAÑAS ---
     tab_mapa, tab_comp, tab_analisis, tab_tamano, tab_reportes, tab_datos = st.tabs([
         "Mapa de Distribución", "Análisis de Muestra", "Análisis Avanzado", "Seguimiento de Tamaño", "Verificación de Campo", "Base de Datos"
     ])
 
-    # --- PESTAÑA 1: MAPAS ESPACIALES ---
+    # --- PESTAÑA 1: MAPAS ESPACIALES (AHORA CON 3D) ---
     with tab_mapa:
         st.subheader("Distribución Espacial de Muestras y Depósitos")
-        tipo_mapa = st.radio("Seleccione la vista espacial:", ["📍 Puntos de Recolección (Muestras individuales)", "🔥 Mapa de Calor (Espesor del depósito)"], horizontal=True)
+        tipo_mapa = st.radio(
+            "Seleccione la vista espacial:", 
+            ["📍 Puntos de Recolección (2D)", "🔥 Mapa de Calor (2D)", "🌋 Vista 3D (Volumen de Depósito)"], 
+            horizontal=True
+        )
         st.markdown("---")
         
         centro_lat = df_filtrado['Latitud'].mean()
         centro_lon = df_filtrado['Longitud'].mean()
-        m = folium.Map(location=[centro_lat, centro_lon], zoom_start=11, tiles='CartoDB positron')
-        
-        if archivo_geojson is not None:
-            geo_data = json.load(archivo_geojson)
-            folium.GeoJson(
-                geo_data, name="Veredas",
-                style_function=lambda feature: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5, 'fillOpacity': 0.15}
-            ).add_to(m)
 
-        if "Puntos" in tipo_mapa:
-            marker_cluster = MarkerCluster().add_to(m)
-            for idx, row in df_filtrado.iterrows():
-                html_popup = f"<div style='width:200px; font-family:sans-serif;'><b>ID: {row.get('ID_Muestra', 'N/A')}</b><br><b>Vereda:</b> {row.get('Vereda', 'N/A')}<br><b>Espesor:</b> {row.get('Espesor_Deposito_mm', 'N/A')} mm</div>"
-                folium.Marker(location=[row['Latitud'], row['Longitud']], popup=folium.Popup(html_popup, max_width=300), tooltip=str(row.get('ID_Muestra', 'Muestra')), icon=folium.Icon(color="darkblue", icon="info-sign")).add_to(marker_cluster)
-        else:
-            if 'Espesor_Deposito_mm' in df_filtrado.columns:
-                heat_data = df_filtrado.dropna(subset=['Latitud', 'Longitud', 'Espesor_Deposito_mm'])
-                heat_points = [[row['Latitud'], row['Longitud'], float(row['Espesor_Deposito_mm']) * 2] for index, row in heat_data.iterrows()]
-                HeatMap(heat_points, radius=25, blur=15, gradient={0.2: 'blue', 0.5: 'yellow', 1.0: 'red'}).add_to(m)
-            else:
-                st.warning("Falta la columna 'Espesor_Deposito_mm' en tu base de datos.")
+        if "3D" in tipo_mapa:
+            st.info("Arrastra el mapa con el botón derecho del mouse (o presiona Shift + clic) para inclinar y rotar la vista 3D.")
+            df_3d = df_filtrado.dropna(subset=['Latitud', 'Longitud', 'Espesor_Deposito_mm']).copy()
+            
+            if not df_3d.empty:
+                # Multiplicamos la elevación para que el pilar se vea claramente en el mapa
+                df_3d['Elevacion_Visual'] = df_3d['Espesor_Deposito_mm'] * 150 
                 
-        st_folium(m, width="100%", height=550)
+                capa_columnas = pdk.Layer(
+                    'ColumnLayer',
+                    data=df_3d,
+                    get_position='[Longitud, Latitud]',
+                    get_elevation='Elevacion_Visual',
+                    elevation_scale=1,
+                    radius=150, # Grosor de los pilares
+                    get_fill_color='[200, 30, 30, 180]', # Rojo translúcido
+                    pickable=True,
+                    auto_highlight=True,
+                )
+                
+                vista_inicial = pdk.ViewState(
+                    longitude=centro_lon,
+                    latitude=centro_lat,
+                    zoom=10.5,
+                    pitch=55, # Inclinación para el efecto 3D
+                    bearing=20 # Rotación
+                )
+                
+                mapa_3d = pdk.Deck(
+                    layers=[capa_columnas],
+                    initial_view_state=vista_inicial,
+                    tooltip={"html": "<b>Muestra:</b> {ID_Muestra} <br/> <b>Vereda:</b> {Vereda} <br/> <b>Espesor real:</b> {Espesor_Deposito_mm} mm", "style": {"color": "white"}},
+                    map_style='mapbox://styles/mapbox/dark-v10' # Tema oscuro para resaltar la ceniza
+                )
+                
+                st.pydeck_chart(mapa_3d, use_container_width=True)
+            else:
+                st.warning("No hay datos de 'Espesor_Deposito_mm' para construir el volumen 3D.")
+        
+        else:
+            m = folium.Map(location=[centro_lat, centro_lon], zoom_start=11, tiles='CartoDB positron')
+            
+            if archivo_geojson is not None:
+                geo_data = json.load(archivo_geojson)
+                folium.GeoJson(
+                    geo_data, name="Veredas",
+                    style_function=lambda feature: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5, 'fillOpacity': 0.15}
+                ).add_to(m)
+
+            if "Puntos" in tipo_mapa:
+                marker_cluster = MarkerCluster().add_to(m)
+                for idx, row in df_filtrado.iterrows():
+                    html_popup = f"<div style='width:200px; font-family:sans-serif;'><b>ID: {row.get('ID_Muestra', 'N/A')}</b><br><b>Vereda:</b> {row.get('Vereda', 'N/A')}<br><b>Espesor:</b> {row.get('Espesor_Deposito_mm', 'N/A')} mm</div>"
+                    folium.Marker(location=[row['Latitud'], row['Longitud']], popup=folium.Popup(html_popup, max_width=300), tooltip=str(row.get('ID_Muestra', 'Muestra')), icon=folium.Icon(color="darkblue", icon="info-sign")).add_to(marker_cluster)
+            elif "Calor" in tipo_mapa:
+                if 'Espesor_Deposito_mm' in df_filtrado.columns:
+                    heat_data = df_filtrado.dropna(subset=['Latitud', 'Longitud', 'Espesor_Deposito_mm'])
+                    heat_points = [[row['Latitud'], row['Longitud'], float(row['Espesor_Deposito_mm']) * 2] for index, row in heat_data.iterrows()]
+                    HeatMap(heat_points, radius=25, blur=15, gradient={0.2: 'blue', 0.5: 'yellow', 1.0: 'red'}).add_to(m)
+                else:
+                    st.warning("Falta la columna 'Espesor_Deposito_mm' en tu base de datos.")
+                    
+            st_folium(m, width="100%", height=550)
 
     # --- PESTAÑA 2: COMPOSICIÓN Y CARRUSEL ---
     with tab_comp:
@@ -229,16 +271,18 @@ else:
         datos_grafica = datos_muestra_pct[datos_muestra_pct > 0].reset_index()
         datos_grafica.columns = ["Componente", "Porcentaje"]
 
-        col_graf, col_foto = st.columns([1.8, 1])
+        # AQUÍ ESTÁ EL AJUSTE DE TAMAÑO (Proporción 1.3 vs 1)
+        col_graf, col_foto = st.columns([1.3, 1])
         mineral_cliqueado = None
 
         with col_graf:
             fig_pie = px.pie(
                 datos_grafica, names="Componente", values="Porcentaje", hole=0.35,
-                color="Componente", color_discrete_map=color_map_oficial # Aplica diccionario de colores
+                color="Componente", color_discrete_map=color_map_oficial
             )
             fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-            fig_pie.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=450, clickmode='event+select')
+            # AQUÍ ESTÁ EL AJUSTE DE ALTURA (height=350)
+            fig_pie.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, clickmode='event+select')
             
             eventos_grafica = st.plotly_chart(fig_pie, use_container_width=True, on_select="rerun", key=f"pie_{muestra_sel}")
             if eventos_grafica and "selection" in eventos_grafica and eventos_grafica["selection"]["points"]:
@@ -279,7 +323,7 @@ else:
             else:
                 st.info("Sin registro fotográfico asociado.")
 
-   # --- PESTAÑA 3: ANÁLISIS AVANZADO (AHORA MÁS LIMPIO) ---
+   # --- PESTAÑA 3: ANÁLISIS AVANZADO ---
     with tab_analisis:
         st.subheader("⚖️ Comparativa de Distribución Mineralógica")
         comp_col1, comp_col2 = st.columns(2)
@@ -303,7 +347,7 @@ else:
         
         fig_barras = px.bar(
             df_comparativo, x="Muestra", y="Porcentaje", color="Componente", 
-            text="Porcentaje", color_discrete_map=color_map_oficial # Aplica diccionario de colores
+            text="Porcentaje", color_discrete_map=color_map_oficial
         )
         fig_barras.update_traces(texttemplate='%{text:.1f}%', textposition='inside')
         st.plotly_chart(fig_barras, use_container_width=True)
@@ -344,7 +388,7 @@ else:
             )
             st.plotly_chart(fig_ternary, use_container_width=True)
 
-    # --- PESTAÑA 4: SEGUIMIENTO DE TAMAÑO (NUEVA) ---
+    # --- PESTAÑA 4: SEGUIMIENTO DE TAMAÑO ---
     with tab_tamano:
         st.subheader("📈 Evolución Temporal del Tamaño de Grano")
         st.write("Seguimiento del diámetro de las partículas a lo largo del tiempo de recolección.")
