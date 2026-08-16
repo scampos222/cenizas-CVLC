@@ -7,6 +7,8 @@ from streamlit_folium import st_folium
 import re
 import json
 import pydeck as pdk
+import os
+from urllib.parse import unquote, urlparse
 
 # ==========================================
 # 1. CONFIGURACIÓN INSTITUCIONAL
@@ -148,16 +150,31 @@ with st.sidebar.expander("📥 Exportar Datos", expanded=False):
     csv_export = df_filtrado.to_csv(index=False).encode('utf-8')
     st.download_button(label="Descargar CSV Filtrado", data=csv_export, file_name='cenizas_filtradas.csv', mime='text/csv', use_container_width=True)
 
+# --- FUNCIONES DE IMAGEN ---
 def obtener_url_imagen(url_original):
     url_limpia = str(url_original).strip()
-    # Si es un enlace de Google Drive
     if "drive.google.com" in url_limpia:
         match = re.search(r'[-\w]{25,}', url_limpia)
         if match:
             file_id = match.group(0)
-            # Usamos el enlace directo de descarga/visualización directa en alta resolución
             return f"https://lh3.googleusercontent.com/d/{file_id}"
     return url_limpia
+
+def obtener_nombre_foto(url_original):
+    url_limpia = str(url_original).strip()
+    if not url_limpia or url_limpia.lower() == "nan":
+        return "Foto sin nombre"
+    
+    # Si viene de Google Drive extraemos el ID para identificarla
+    if "drive.google.com" in url_limpia:
+        match = re.search(r'[-\w]{25,}', url_limpia)
+        if match:
+            return f"Archivo Drive (ID: ...{match.group(0)[-6:]})"
+    
+    # Para GitHub u otros servidores directos, extraemos el nombre del archivo
+    path = urlparse(url_limpia).path
+    nombre_archivo = os.path.basename(unquote(path))
+    return nombre_archivo if nombre_archivo else "Fotografía Muestra"
 
 # ==========================================
 # 4. DASHBOARD PRINCIPAL
@@ -198,7 +215,6 @@ else:
         )
         st.markdown("---")
         
-        # Filtrar datos válidos de latitud y longitud para evitar que Folium colapse
         df_mapa = df_filtrado.dropna(subset=['Latitud', 'Longitud']).copy()
         
         if df_mapa.empty:
@@ -238,10 +254,8 @@ else:
                     st.warning("No hay datos de 'Espesor_Deposito_mm' para construir el volumen 3D.")
             
             else:
-                # --- MAPA 2D ---
                 m = folium.Map(location=[centro_lat, centro_lon], zoom_start=11, tiles='CartoDB positron')
                 
-                # Capa 1: Relieve Topográfico
                 folium.TileLayer(
                     tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
                     attr='Esri',
@@ -250,19 +264,17 @@ else:
                     control=True
                 ).add_to(m)
 
-                # Capa 2: Mapa de Amenaza (Servidor ArcGIS / SGC)
-                url_arcgis_layer = 'https://services.arcgis.com/WMSServer' # O la URL REST directa de tu servidor
+                url_wms_sgc = 'https://srvags.sgc.gov.co/arcgis/services/Amenaza_Volcanica/Amenaza_Volcanica/MapServer/WMSServer' 
                 
-                folium.TileLayer(
-                    tiles='https://server.arcgisonline.com/ArcGIS/rest/services/Specialty/DeLorme_World_Base_Map/MapServer/tile/{z}/{y}/{x}',
-                    attr='ArcGIS Online',
-                    name='Mapa Geológico / Amenaza (ArcGIS)',
-                    overlay=True,
-                    opacity=0.7,
+                folium.raster_layers.WmsTileLayer(
+                    url=url_wms_sgc,
+                    layers='0',
+                    name='Amenaza Volcánica (SGC)',
+                    fmt='image/png',
+                    transparent=True,
                     control=True
                 ).add_to(m)
                 
-                # Capa 3: GeoJSON Veredas
                 if archivo_geojson is not None:
                     geo_data = json.load(archivo_geojson)
                     folium.GeoJson(
@@ -270,7 +282,6 @@ else:
                         style_function=lambda feature: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5, 'fillOpacity': 0.15}
                     ).add_to(m)
 
-                # Capa 4: Puntos o Calor
                 if "Puntos" in tipo_mapa:
                     marker_cluster = MarkerCluster().add_to(m)
                     for idx, row in df_mapa.iterrows():
@@ -286,7 +297,6 @@ else:
                     else:
                         st.warning("Falta la columna 'Espesor_Deposito_mm' en tu base de datos.")
 
-                # Control para encender o apagar las capas (SIEMPRE AL FINAL)
                 folium.LayerControl().add_to(m)
                         
                 st_folium(m, width="100%", height=550)
@@ -294,8 +304,53 @@ else:
     # --- PESTAÑA 2: COMPOSICIÓN Y CARRUSEL ---
     with tab_comp:
         st.subheader("Caracterización Mineralógica Individual")
-        muestra_sel = st.selectbox("Seleccione ID de Muestra:", df_filtrado["ID_Muestra"])
+        
+        lista_muestras = df_filtrado["ID_Muestra"].tolist()
+        
+        # Inicializar índice de muestra en session_state si no existe
+        if "idx_muestra_actual" not in st.session_state or st.session_state["idx_muestra_actual"] >= len(lista_muestras):
+            st.session_state["idx_muestra_actual"] = 0
 
+        # AJUSTE 1: BOTONES PARA NAVEGAR ENTRE MUESTRAS
+        col_m_prev, col_m_select, col_m_next = st.columns([1, 3, 1])
+        
+        with col_m_prev:
+            if st.button("⬅️ Muestra Anterior", use_container_width=True):
+                st.session_state["idx_muestra_actual"] = (st.session_state["idx_muestra_actual"] - 1) % len(lista_muestras)
+                st.rerun()
+
+        with col_m_next:
+            if st.button("Muestra Siguiente ➡️", use_container_width=True):
+                st.session_state["idx_muestra_actual"] = (st.session_state["idx_muestra_actual"] + 1) % len(lista_muestras)
+                st.rerun()
+
+        with col_m_select:
+            muestra_sel = st.selectbox(
+                "Seleccione ID de Muestra:", 
+                options=lista_muestras, 
+                index=st.session_state["idx_muestra_actual"],
+                key="select_muestra_main"
+            )
+            # Sincronizar el selectbox con el índice
+            st.session_state["idx_muestra_actual"] = lista_muestras.index(muestra_sel)
+
+        # AJUSTE 2: DETALLES DE LA MUESTRA EN UN CUADRO INFORMATIVO
+        datos_m_crudos = df_filtrado[df_filtrado["ID_Muestra"] == muestra_sel].iloc[0]
+        
+        vereda_val = datos_m_crudos.get('Vereda', 'N/A')
+        
+        if 'Fecha_Recoleccion' in datos_m_crudos and pd.notna(datos_m_crudos['Fecha_Recoleccion']):
+            fecha_val = pd.to_datetime(datos_m_crudos['Fecha_Recoleccion']).strftime('%Y-%m-%d')
+        else:
+            fecha_val = 'N/A'
+            
+        tamano_val = f"{datos_m_crudos.get('Tamaño_Promedio_mm', 'N/A')} mm"
+        espesor_val = f"{datos_m_crudos.get('Espesor_Deposito_mm', 'N/A')} mm"
+        total_granos_val = datos_m_crudos.get('Total_Granos', 'N/A')
+
+        st.info(f"📋 **Detalles de la Muestra:** Vereda: **{vereda_val}** | Fecha Recolección: **{fecha_val}** | Tamaño Promedio: **{tamano_val}** | Espesor Depósito: **{espesor_val}** | Total Granos: **{total_granos_val}**")
+
+        # CONTINUACIÓN: DIBUJO DE LA TORTA Y CARRUSEL
         datos_muestra_pct = df_pct_filtrado[df_pct_filtrado["ID_Muestra"] == muestra_sel][cols_conteo].iloc[0]
         datos_grafica = datos_muestra_pct[datos_muestra_pct > 0].reset_index()
         datos_grafica.columns = ["Componente", "Porcentaje"]
@@ -316,7 +371,6 @@ else:
                 mineral_cliqueado = eventos_grafica["selection"]["points"][0]["label"]
 
         with col_foto:
-            datos_m_crudos = df_filtrado[df_filtrado["ID_Muestra"] == muestra_sel].iloc[0]
             if "URLs_Fotos" in datos_m_crudos and pd.notna(datos_m_crudos["URLs_Fotos"]):
                 urls_crudas = str(datos_m_crudos["URLs_Fotos"]).split(",")
                 urls_limpias = [u.strip() for u in urls_crudas if u.strip() and u.strip().lower() != "nan"]
@@ -344,7 +398,11 @@ else:
                             st.session_state[clave_estado] = (st.session_state[clave_estado] + 1) % len(urls_limpias)
 
                     url_actual = urls_limpias[st.session_state[clave_estado]]
-                    st.image(obtener_url_imagen(url_actual), caption=f"Muestra {muestra_sel}", use_container_width=True)
+                    
+                    # AJUSTE 3: EXTRAER Y MOSTRAR EL NOMBRE DE LA FOTO EN LA PARTE INFERIOR
+                    nombre_foto = obtener_nombre_foto(url_actual)
+                    
+                    st.image(obtener_url_imagen(url_actual), caption=f"Muestra {muestra_sel} | {nombre_foto}", use_container_width=True)
                 else:
                     st.info("No se encontraron enlaces válidos.")
             else:
