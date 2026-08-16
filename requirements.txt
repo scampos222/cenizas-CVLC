@@ -13,3 +13,4 @@ pydeck
 scipy
 numpy
 matplotlib
+fpdf
