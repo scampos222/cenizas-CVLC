@@ -2,3 +2,9 @@ streamlit
 pandas
 plotly
 openpyxl
+streamlit
+pandas
+plotly
+openpyxl
+folium
+streamlit-folium
