@@ -179,7 +179,7 @@ else:
         datos_grafica = datos_muestra_pct[datos_muestra_pct > 0].reset_index()
         datos_grafica.columns = ['Componente', 'Porcentaje']
         
-        col_graf, col_foto = st.columns([1, 1])
+        col_graf, col_foto = st.columns([1, 1.2]) # Hacemos la columna de fotos un poco más ancha
         with col_graf:
             fig_pie = px.pie(
                 datos_grafica, names='Componente', values='Porcentaje', hole=0.3,
@@ -191,22 +191,34 @@ else:
             
         with col_foto:
             datos_m_crudos = df_filtrado[df_filtrado['ID_Muestra'] == muestra_sel].iloc[0]
+            
+            # --- LÓGICA DE MULTI-FOTOS ---
             if 'URLs_Fotos' in datos_m_crudos and pd.notna(datos_m_crudos['URLs_Fotos']):
-                # Separar por comas para múltiples fotos
+                # Separar los links por comas. Convertimos a string por seguridad.
                 urls_crudas = str(datos_m_crudos['URLs_Fotos']).split(',')
-                urls_limpias = [u.strip() for u in urls_crudas if u.strip()]
+                # Limpiamos espacios en blanco de cada link
+                urls_limpias = [u.strip() for u in urls_crudas if u.strip() and u.strip() != 'nan']
                 
                 if urls_limpias:
-                    st.write("**Registro Fotográfico:**")
-                    # Mostrar fotos en columnas si hay varias
-                    cols_galeria = st.columns(len(urls_limpias))
+                    st.write("📷 **Registro Fotográfico de la Muestra:**")
+                    
+                    # Si hay más de 3 fotos, limitamos la vista a 3 por fila para no romper el diseño
+                    max_por_fila = 3 if len(urls_limpias) > 3 else len(urls_limpias)
+                    cols_galeria = st.columns(max_por_fila)
+                    
                     for i, url in enumerate(urls_limpias):
-                        with cols_galeria[i]:
-                            st.image(obtener_url_imagen(url), use_container_width=True)
+                        # Este cálculo asegura que las fotos bajen de renglón si hay más de 3
+                        columna_actual = cols_galeria[i % max_por_fila]
+                        
+                        with columna_actual:
+                            # Usamos nuestra función antibloqueo de Google Drive
+                            url_final = obtener_url_imagen(url)
+                            # Mostramos la foto con un subtítulo
+                            st.image(url_final, caption=f"Foto {i+1}", use_container_width=True)
                 else:
-                    st.info("No hay registro fotográfico.")
+                    st.info("No se encontraron enlaces válidos de fotografías.")
             else:
-                st.info("No hay registro fotográfico.")
+                st.info("Esta muestra no tiene registro fotográfico asociado en la base de datos.")
 
     # --- PESTAÑA 3: ANÁLISIS AVANZADO ---
     with tab_analisis:
