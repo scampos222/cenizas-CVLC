@@ -21,16 +21,10 @@ st.title("AshViewer-CVLC | Plataforma de Análisis de Cenizas Volcánicas")
 
 # 2. CARGA DE DATOS Y PANEL LATERAL
 st.sidebar.title("Panel de Control")
-archivo_subido = st.sidebar.file_uploader("Cargar Base de Datos (.xlsx / .csv)", type=["xlsx", "csv"])
 
-# --- NUEVO: Carga de GeoJSON ---
-archivo_geojson = st.sidebar.file_uploader("Cargar Capa Veredas (.geojson)", type=["geojson", "json"])
-
-if archivo_subido is not None:
-    if archivo_subido.name.endswith('.csv'):
-        df = pd.read_csv(archivo_subido)
-    else:
-        df = pd.read_excel(archivo_subido)
+with st.sidebar.expander("📂 Carga de Archivos", expanded=True):
+    archivo_subido = st.file_uploader("Cargar Base de Datos (.xlsx / .csv)", type=["xlsx", "csv"])
+    archivo_geojson = st.file_uploader("Cargar Capa Veredas (.geojson)", type=["geojson", "json"])
 else:
     st.info("Carga tu base de datos para iniciar. Mostrando entorno de prueba.")
     datos_prueba = {
