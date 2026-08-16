@@ -92,16 +92,14 @@ colores_profesionales = px.colors.qualitative.Pastel
 
 # Función para limpiar links de Google Drive
 # Función mejorada y a prueba de errores para links de Drive
+# Función definitiva para imágenes de Drive
 def obtener_url_imagen(url_original):
-    # Limpiamos espacios y caracteres invisibles que se cuelan del Excel
     url_limpia = str(url_original).strip()
-    
     if "drive.google.com" in url_limpia:
-        # Busca el ID de 33 caracteres de Google Drive sin importar cómo esté formateado el link
         match = re.search(r'[-\w]{25,}', url_limpia)
         if match:
-            # Usamos el formato oficial de descarga directa de Google
-            return f"https://drive.google.com/uc?export=view&id={match.group(0)}"
+            # Forzamos el uso del visor directo de Drive
+            return f"https://drive.google.com/uc?id={match.group(0)}"
     return url_limpia
 
 # 4. DASHBOARD PRINCIPAL
@@ -176,65 +174,92 @@ else:
                 
         st_folium(m, width="100%", height=550)
 
-    # --- PESTAÑA 2: COMPOSICIÓN (MÚLTIPLES FOTOS) ---
+   # --- PESTAÑA 2: COMPOSICIÓN Y CARRUSEL DE FOTOS ---
     with tab_comp:
         st.subheader("Caracterización Mineralógica Individual")
-        muestra_sel = st.selectbox("Seleccione ID de Muestra:", df_filtrado['ID_Muestra'])
-        
-        datos_muestra_pct = df_pct_filtrado[df_pct_filtrado['ID_Muestra'] == muestra_sel][cols_conteo].iloc[0]
+        muestra_sel = st.selectbox(
+            "Seleccione ID de Muestra:", df_filtrado["ID_Muestra"]
+        )
+
+        datos_muestra_pct = df_pct_filtrado[
+            df_pct_filtrado["ID_Muestra"] == muestra_sel
+        ][cols_conteo].iloc[0]
         datos_grafica = datos_muestra_pct[datos_muestra_pct > 0].reset_index()
-        datos_grafica.columns = ['Componente', 'Porcentaje']
+        datos_grafica.columns = ["Componente", "Porcentaje"]
+
+        # AQUÍ INVERTIMOS LAS PROPORCIONES: [1.5 (Torta), 1 (Foto)]
+        col_graf, col_foto = st.columns([1.5, 1])
         
-        col_graf, col_foto = st.columns([1, 1.2]) # Hacemos la columna de fotos un poco más ancha
         with col_graf:
             fig_pie = px.pie(
-                datos_grafica, names='Componente', values='Porcentaje', hole=0.3,
-                color_discrete_sequence=colores_profesionales
+                datos_grafica,
+                names="Componente",
+                values="Porcentaje",
+                hole=0.3,
+                color_discrete_sequence=colores_profesionales,
             )
-            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-            fig_pie.update_layout(margin=dict(t=20, b=20, l=20, r=20))
+            fig_pie.update_traces(textposition="inside", textinfo="percent+label")
+            # Aumentamos los márgenes para que la torta respire
+            fig_pie.update_layout(margin=dict(t=30, b=30, l=30, r=30))
             st.plotly_chart(fig_pie, use_container_width=True)
-            
+
         with col_foto:
-            datos_m_crudos = df_filtrado[df_filtrado['ID_Muestra'] == muestra_sel].iloc[0]
-            
-            # --- GALERÍA CARRUSEL ---
-            if 'URLs_Fotos' in datos_m_crudos and pd.notna(datos_m_crudos['URLs_Fotos']):
-                urls_crudas = str(datos_m_crudos['URLs_Fotos']).split(',')
-                urls_limpias = [u.strip() for u in urls_crudas if u.strip() and u.strip() != 'nan']
-                
+            datos_m_crudos = df_filtrado[
+                df_filtrado["ID_Muestra"] == muestra_sel
+            ].iloc[0]
+
+            if "URLs_Fotos" in datos_m_crudos and pd.notna(
+                datos_m_crudos["URLs_Fotos"]
+            ):
+                urls_crudas = str(datos_m_crudos["URLs_Fotos"]).split(",")
+                urls_limpias = [
+                    u.strip()
+                    for u in urls_crudas
+                    if u.strip() and u.strip().lower() != "nan"
+                ]
+
                 if urls_limpias:
-                    st.write("📷 **Registro Fotográfico de la Muestra:**")
-                    
-                    # Manejo de estado para recordar qué foto estamos viendo
+                    st.write("📷 **Registro Fotográfico:**")
+
                     clave_estado = f"foto_idx_{muestra_sel}"
                     if clave_estado not in st.session_state:
                         st.session_state[clave_estado] = 0
-                        
-                    # Controles del carrusel (Botones Anterior / Siguiente)
+
                     col_btn1, col_texto, col_btn2 = st.columns([1, 2, 1])
-                    
+
                     with col_btn1:
                         if st.button("⬅️ Anterior", key=f"prev_{muestra_sel}"):
-                            st.session_state[clave_estado] = (st.session_state[clave_estado] - 1) % len(urls_limpias)
-                    
+                            st.session_state[clave_estado] = (
+                                st.session_state[clave_estado] - 1
+                            ) % len(urls_limpias)
+
                     with col_texto:
-                        st.markdown(f"<div style='text-align: center; margin-top: 8px;'>Foto {st.session_state[clave_estado] + 1} de {len(urls_limpias)}</div>", unsafe_allow_html=True)
-                        
+                        st.markdown(
+                            f"<div style='text-align: center; margin-top: 8px;'>Foto "
+                            f"{st.session_state[clave_estado] + 1} de "
+                            f"{len(urls_limpias)}</div>",
+                            unsafe_allow_html=True,
+                        )
+
                     with col_btn2:
                         if st.button("Siguiente ➡️", key=f"next_{muestra_sel}"):
-                            st.session_state[clave_estado] = (st.session_state[clave_estado] + 1) % len(urls_limpias)
-                    
-                    # Mostrar la foto actual seleccionada grande y hermosa
+                            st.session_state[clave_estado] = (
+                                st.session_state[clave_estado] + 1
+                            ) % len(urls_limpias)
+
                     url_actual = urls_limpias[st.session_state[clave_estado]]
                     url_final = obtener_url_imagen(url_actual)
-                    
-                    st.image(url_final, use_container_width=True)
-                    
+
+                    # Sistema anticaídas: Intenta cargar con st.image, si falla, usa HTML crudo
+                    try:
+                        st.image(url_final, use_container_width=True)
+                    except Exception:
+                        st.markdown(f'<img src="{url_final}" style="width:100%;">', unsafe_allow_html=True)
+                        
                 else:
-                    st.info("No se encontraron enlaces válidos de fotografías.")
+                    st.info("No se encontraron enlaces válidos.")
             else:
-                st.info("Esta muestra no tiene registro fotográfico asociado en la base de datos.")
+                st.info("Sin registro fotográfico asociado.")
 
     # --- PESTAÑA 3: ANÁLISIS AVANZADO ---
     with tab_analisis:
