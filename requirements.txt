@@ -9,3 +9,4 @@ openpyxl
 folium
 streamlit-folium
 statsmodels
+pydeck
