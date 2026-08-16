@@ -268,20 +268,26 @@ def generar_pdf_reporte(m_sel, vereda, fecha, espesor, tamano, riesgo, df_graf):
     pdf.cell(200, 10, txt=f"Muestra: {m_sel}", ln=True, align='C')
     pdf.ln(10)
     
+    # Blindaje: Limpiar los emojis que la librería PDF no soporta
+    riesgo_limpio = str(riesgo).replace('🟢', '').replace('🟠', '').replace('🔴', '').replace('⚪', '').strip()
+    
     pdf.set_font("Arial", '', 12)
     pdf.cell(200, 10, txt=f"Vereda/Localidad: {vereda}", ln=True)
     pdf.cell(200, 10, txt=f"Fecha de Recoleccion: {fecha}", ln=True)
     pdf.cell(200, 10, txt=f"Espesor del Deposito: {espesor}", ln=True)
-    pdf.cell(200, 10, txt=f"Nivel de Riesgo Local: {riesgo}", ln=True)
+    pdf.cell(200, 10, txt=f"Nivel de Riesgo Local: {riesgo_limpio}", ln=True)
     pdf.ln(10)
     
     pdf.set_font("Arial", 'B', 14)
     pdf.cell(200, 10, txt="Composicion Mineralogica (%)", ln=True)
     pdf.set_font("Arial", '', 12)
     for index, row in df_graf.iterrows():
-        pdf.cell(200, 10, txt=f"- {row['Componente']}: {round(row['Porcentaje'], 2)}%", ln=True)
+        # Blindaje extra por si los nombres de los minerales tienen caracteres raros
+        comp_limpio = str(row['Componente']).encode('latin-1', 'ignore').decode('latin-1')
+        pdf.cell(200, 10, txt=f"- {comp_limpio}: {round(row['Porcentaje'], 2)}%", ln=True)
     
-    pdf_output = pdf.output(dest='S').encode('latin-1')
+    # Generar el PDF ignorando cualquier otro caracter no soportado
+    pdf_output = pdf.output(dest='S').encode('latin-1', 'ignore')
     b64 = base64.b64encode(pdf_output).decode()
     return f'<a href="data:application/pdf;base64,{b64}" download="Reporte_{m_sel}.pdf" class="button" style="text-decoration:none;background-color:#2980B9;color:white;padding:8px 12px;border-radius:5px;font-size:14px;font-weight:bold;">📥 Descargar Ficha Técnica (PDF)</a>'
 
