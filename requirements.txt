@@ -12,3 +12,4 @@ statsmodels
 pydeck
 scipy
 numpy
+matplotlib
