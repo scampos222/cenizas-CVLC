@@ -14,10 +14,33 @@ st.markdown("""
     <style>
     .main {background-color: #FAFAFA;}
     h1, h2, h3 {color: #2C3E50;}
+    /* Estilo para las tarjetas de KPIs */
+    div[data-testid="metric-container"] {
+        background-color: #FFFFFF;
+        border: 1px solid #EAEAEA;
+        padding: 15px;
+        border-radius: 10px;
+        box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
+    }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("AshViewer-CVLC | Plataforma de Análisis de Cenizas Volcánicas")
+
+# ==========================================
+# PALETA DE COLORES GEOLÓGICA (NUEVO)
+# ==========================================
+# Colores fijos para que los minerales siempre se vean igual en todas las gráficas
+color_map_oficial = {
+    "LV1": "#555555",          # Lítico (Gris Oscuro)
+    "LVA1": "#8B4513",         # Lítico Alterado (Marrón)
+    "Plagioclasa": "#D3D3D3",  # Cristal (Gris Claro/Blanco)
+    "Cuarzo": "#F5F5F5",       # Cristal (Blanco hueso)
+    "FV1": "#FF8C00",          # Vidrio (Naranja)
+    "Epidotas": "#9ACD32",     # Alteración (Verde)
+    "Otros_Cristales": "#9370DB" # Otros (Morado)
+}
+colores_profesionales = px.colors.qualitative.Pastel # Para variables como Veredas
 
 # ==========================================
 # 2. CARGA DE DATOS Y PANEL LATERAL
@@ -29,7 +52,6 @@ with st.sidebar.expander("📂 Carga de Archivos", expanded=True):
     archivo_subido = st.file_uploader("Cargar Base de Datos (.xlsx / .csv)", type=["xlsx", "csv"])
     archivo_geojson = st.file_uploader("Cargar Capa Veredas (.geojson)", type=["geojson", "json"])
 
-# Verificación de archivo de base de datos
 if archivo_subido is not None:
     if archivo_subido.name.endswith('.csv'):
         df = pd.read_csv(archivo_subido)
@@ -69,17 +91,14 @@ for col in cols_conteo:
 # ==========================================
 st.sidebar.markdown("---")
 
-# --- DESPLEGABLE 2: FILTRO ESPACIAL ---
 with st.sidebar.expander("🗺️ Filtros Espaciales", expanded=False):
     if 'Vereda' in df.columns:
         veredas_unicas = sorted(df['Vereda'].dropna().unique().tolist())
-
         if "veredas_selected" not in st.session_state:
             st.session_state["veredas_selected"] = veredas_unicas
 
         def seleccionar_todas_veredas():
             st.session_state["veredas_selected"] = veredas_unicas
-
         def limpiar_todas_veredas():
             st.session_state["veredas_selected"] = []
 
@@ -89,25 +108,16 @@ with st.sidebar.expander("🗺️ Filtros Espaciales", expanded=False):
         with col_v2:
             st.button("Limpiar", on_click=limpiar_todas_veredas, use_container_width=True)
 
-        veredas_seleccionadas = st.multiselect(
-            "Localidad / Vereda:",
-            options=veredas_unicas,
-            key="veredas_selected"
-        )
+        veredas_seleccionadas = st.multiselect("Localidad / Vereda:", options=veredas_unicas, key="veredas_selected")
     else:
         veredas_seleccionadas = []
 
-# --- DESPLEGABLE 3: FILTRO TEMPORAL ---
 with st.sidebar.expander("📅 Filtros Temporales", expanded=False):
     if 'Fecha_Recoleccion' in df.columns and not df['Fecha_Recoleccion'].isnull().all():
         df['Anio'] = df['Fecha_Recoleccion'].dt.year
         df['Mes_Num'] = df['Fecha_Recoleccion'].dt.month
 
-        dic_meses = {
-            1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
-            7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
-        }
-
+        dic_meses = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
         anios_disponibles = ["Todos los Años"] + sorted([int(a) for a in df['Anio'].dropna().unique()], reverse=True)
         anio_sel = st.selectbox("Año de Recolección:", anios_disponibles)
 
@@ -129,12 +139,15 @@ with st.sidebar.expander("📅 Filtros Temporales", expanded=False):
     else:
         mask_fecha = pd.Series(True, index=df.index)
 
-# --- APLICACIÓN DE FILTROS ---
 mask_vereda = df['Vereda'].isin(veredas_seleccionadas) if veredas_seleccionadas else pd.Series(True, index=df.index)
-
 df_filtrado = df[mask_vereda & mask_fecha]
 df_pct_filtrado = df_pct[mask_vereda & mask_fecha]
-colores_profesionales = px.colors.qualitative.Pastel
+
+# --- NUEVO: BOTÓN DE EXPORTACIÓN ---
+with st.sidebar.expander("📥 Exportar Datos", expanded=False):
+    st.write("Descarga los datos con los filtros actuales.")
+    csv_export = df_filtrado.to_csv(index=False).encode('utf-8')
+    st.download_button(label="Descargar CSV Filtrado", data=csv_export, file_name='cenizas_filtradas.csv', mime='text/csv', use_container_width=True)
 
 def obtener_url_imagen(url_original):
     url_limpia = str(url_original).strip()
@@ -150,22 +163,35 @@ def obtener_url_imagen(url_original):
 if df_filtrado.empty:
     st.warning("No se encontraron registros bajo los parámetros seleccionados.")
 else:
+    # --- NUEVO: TARJETAS EJECUTIVAS (KPIs) ---
+    st.subheader("📊 Resumen Ejecutivo")
+    kpi1, kpi2, kpi3 = st.columns(3)
+    
+    with kpi1:
+        st.metric("Muestras Analizadas", len(df_filtrado))
+    
+    with kpi2:
+        espesor_max = df_filtrado['Espesor_Deposito_mm'].max() if 'Espesor_Deposito_mm' in df_filtrado.columns else "N/A"
+        st.metric("Espesor Máximo (mm)", f"{espesor_max}")
+        
+    with kpi3:
+        if not df_filtrado[cols_conteo].empty:
+            mineral_dom = df_filtrado[cols_conteo].sum().idxmax()
+            st.metric("Componente Dominante", mineral_dom)
+        else:
+            st.metric("Componente Dominante", "N/A")
+
     st.markdown("---")
     
-    tab_mapa, tab_comp, tab_analisis, tab_reportes, tab_datos = st.tabs([
-        "Mapa de Distribución", "Análisis de Muestra", "Análisis Avanzado", "Verificación de Campo", "Base de Datos"
+    # --- NUEVO: 6 PESTAÑAS ---
+    tab_mapa, tab_comp, tab_analisis, tab_tamano, tab_reportes, tab_datos = st.tabs([
+        "Mapa de Distribución", "Análisis de Muestra", "Análisis Avanzado", "Seguimiento de Tamaño", "Verificación de Campo", "Base de Datos"
     ])
 
     # --- PESTAÑA 1: MAPAS ESPACIALES ---
     with tab_mapa:
         st.subheader("Distribución Espacial de Muestras y Depósitos")
-        
-        tipo_mapa = st.radio(
-            "Seleccione la vista espacial:",
-            ["📍 Puntos de Recolección (Muestras individuales)", "🔥 Mapa de Calor (Espesor del depósito)"],
-            horizontal=True
-        )
-        
+        tipo_mapa = st.radio("Seleccione la vista espacial:", ["📍 Puntos de Recolección (Muestras individuales)", "🔥 Mapa de Calor (Espesor del depósito)"], horizontal=True)
         st.markdown("---")
         
         centro_lat = df_filtrado['Latitud'].mean()
@@ -175,46 +201,20 @@ else:
         if archivo_geojson is not None:
             geo_data = json.load(archivo_geojson)
             folium.GeoJson(
-                geo_data,
-                name="Veredas",
-                style_function=lambda feature: {
-                    'fillColor': '#2980B9',
-                    'color': '#2C3E50',
-                    'weight': 1.5,
-                    'fillOpacity': 0.15
-                }
-                # tooltip=folium.GeoJsonTooltip(fields=['NOMBRE'], aliases=['Vereda:']) <- Ajustar según tu capa
+                geo_data, name="Veredas",
+                style_function=lambda feature: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5, 'fillOpacity': 0.15}
             ).add_to(m)
 
         if "Puntos" in tipo_mapa:
             marker_cluster = MarkerCluster().add_to(m)
-            
             for idx, row in df_filtrado.iterrows():
-                html_popup = f"""
-                <div style='width:200px; font-family:sans-serif;'>
-                <b>ID: {row.get('ID_Muestra', 'N/A')}</b><br>
-                <b>Vereda:</b> {row.get('Vereda', 'N/A')}<br>
-                <b>Fecha:</b> {row['Fecha_Recoleccion'].strftime('%Y-%m-%d') if 'Fecha_Recoleccion' in df_filtrado.columns and pd.notna(row.get('Fecha_Recoleccion')) else 'N/A'}<br>
-                <b>Espesor:</b> {row.get('Espesor_Deposito_mm', 'N/A')} mm
-                </div>
-                """
-                folium.Marker(
-                    location=[row['Latitud'], row['Longitud']],
-                    popup=folium.Popup(html_popup, max_width=300),
-                    tooltip=str(row.get('ID_Muestra', 'Muestra')),
-                    icon=folium.Icon(color="darkblue", icon="info-sign")
-                ).add_to(marker_cluster)
-                
+                html_popup = f"<div style='width:200px; font-family:sans-serif;'><b>ID: {row.get('ID_Muestra', 'N/A')}</b><br><b>Vereda:</b> {row.get('Vereda', 'N/A')}<br><b>Espesor:</b> {row.get('Espesor_Deposito_mm', 'N/A')} mm</div>"
+                folium.Marker(location=[row['Latitud'], row['Longitud']], popup=folium.Popup(html_popup, max_width=300), tooltip=str(row.get('ID_Muestra', 'Muestra')), icon=folium.Icon(color="darkblue", icon="info-sign")).add_to(marker_cluster)
         else:
-            st.info("El mapa de calor muestra la concentración basada en la variable 'Espesor_Deposito_mm'.")
             if 'Espesor_Deposito_mm' in df_filtrado.columns:
                 heat_data = df_filtrado.dropna(subset=['Latitud', 'Longitud', 'Espesor_Deposito_mm'])
                 heat_points = [[row['Latitud'], row['Longitud'], float(row['Espesor_Deposito_mm']) * 2] for index, row in heat_data.iterrows()]
-                HeatMap(
-                    heat_points, 
-                    radius=25, blur=15, 
-                    gradient={0.2: 'blue', 0.5: 'yellow', 1.0: 'red'}
-                ).add_to(m)
+                HeatMap(heat_points, radius=25, blur=15, gradient={0.2: 'blue', 0.5: 'yellow', 1.0: 'red'}).add_to(m)
             else:
                 st.warning("Falta la columna 'Espesor_Deposito_mm' en tu base de datos.")
                 
@@ -230,28 +230,22 @@ else:
         datos_grafica.columns = ["Componente", "Porcentaje"]
 
         col_graf, col_foto = st.columns([1.8, 1])
-        
         mineral_cliqueado = None
 
         with col_graf:
             fig_pie = px.pie(
-                datos_grafica,
-                names="Componente",
-                values="Porcentaje",
-                hole=0.35,
-                color_discrete_sequence=colores_profesionales,
+                datos_grafica, names="Componente", values="Porcentaje", hole=0.35,
+                color="Componente", color_discrete_map=color_map_oficial # Aplica diccionario de colores
             )
             fig_pie.update_traces(textposition="inside", textinfo="percent+label")
             fig_pie.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=450, clickmode='event+select')
             
             eventos_grafica = st.plotly_chart(fig_pie, use_container_width=True, on_select="rerun", key=f"pie_{muestra_sel}")
-            
             if eventos_grafica and "selection" in eventos_grafica and eventos_grafica["selection"]["points"]:
                 mineral_cliqueado = eventos_grafica["selection"]["points"][0]["label"]
 
         with col_foto:
             datos_m_crudos = df_filtrado[df_filtrado["ID_Muestra"] == muestra_sel].iloc[0]
-
             if "URLs_Fotos" in datos_m_crudos and pd.notna(datos_m_crudos["URLs_Fotos"]):
                 urls_crudas = str(datos_m_crudos["URLs_Fotos"]).split(",")
                 urls_limpias = [u.strip() for u in urls_crudas if u.strip() and u.strip().lower() != "nan"]
@@ -259,67 +253,57 @@ else:
                 if urls_limpias:
                     st.write("📷 **Registro Fotográfico:**")
                     clave_estado = f"foto_idx_{muestra_sel}"
-                    
                     if clave_estado not in st.session_state:
                         st.session_state[clave_estado] = 0
 
                     if mineral_cliqueado:
-                        st.success(f"Buscando foto para: **{mineral_cliqueado}**")
                         for idx, link in enumerate(urls_limpias):
                             if mineral_cliqueado.lower() in link.lower():
                                 st.session_state[clave_estado] = idx
                                 break
 
                     col_btn1, col_texto, col_btn2 = st.columns([1, 2, 1])
-
                     with col_btn1:
                         if st.button("⬅️ Anterior", key=f"prev_{muestra_sel}"):
                             st.session_state[clave_estado] = (st.session_state[clave_estado] - 1) % len(urls_limpias)
-
                     with col_texto:
-                        st.markdown(
-                            f"<div style='text-align: center; margin-top: 8px;'>Foto {st.session_state[clave_estado] + 1} de {len(urls_limpias)}</div>",
-                            unsafe_allow_html=True,
-                        )
-
+                        st.markdown(f"<div style='text-align: center; margin-top: 8px;'>Foto {st.session_state[clave_estado] + 1} de {len(urls_limpias)}</div>", unsafe_allow_html=True)
                     with col_btn2:
                         if st.button("Siguiente ➡️", key=f"next_{muestra_sel}"):
                             st.session_state[clave_estado] = (st.session_state[clave_estado] + 1) % len(urls_limpias)
 
                     url_actual = urls_limpias[st.session_state[clave_estado]]
-                    url_final = obtener_url_imagen(url_actual)
-
-                    st.image(url_final, caption=f"Muestra {muestra_sel}", use_container_width=True)
+                    st.image(obtener_url_imagen(url_actual), caption=f"Muestra {muestra_sel}", use_container_width=True)
                 else:
                     st.info("No se encontraron enlaces válidos.")
             else:
                 st.info("Sin registro fotográfico asociado.")
 
-   # --- PESTAÑA 3: ANÁLISIS AVANZADO ---
+   # --- PESTAÑA 3: ANÁLISIS AVANZADO (AHORA MÁS LIMPIO) ---
     with tab_analisis:
         st.subheader("⚖️ Comparativa de Distribución Mineralógica")
         comp_col1, comp_col2 = st.columns(2)
         
         with comp_col1:
             muestra_1 = st.selectbox("Muestra A:", df_filtrado['ID_Muestra'], key="comp1")
-            datos_m1_pct = df_pct_filtrado[df_pct_filtrado['ID_Muestra'] == muestra_1][cols_conteo].iloc[0]
-            datos_grafica_1 = datos_m1_pct[datos_m1_pct > 0].reset_index()
+            datos_grafica_1 = df_pct_filtrado[df_pct_filtrado['ID_Muestra'] == muestra_1][cols_conteo].iloc[0]
+            datos_grafica_1 = datos_grafica_1[datos_grafica_1 > 0].reset_index()
             datos_grafica_1.columns = ['Componente', 'Porcentaje']
+            datos_grafica_1['Muestra'] = muestra_1
             
         with comp_col2:
             idx_default = 1 if len(df_filtrado) > 1 else 0
             muestra_2 = st.selectbox("Muestra B:", df_filtrado['ID_Muestra'], index=idx_default, key="comp2")
-            datos_m2_pct = df_pct_filtrado[df_pct_filtrado['ID_Muestra'] == muestra_2][cols_conteo].iloc[0]
-            datos_grafica_2 = datos_m2_pct[datos_m2_pct > 0].reset_index()
+            datos_grafica_2 = df_pct_filtrado[df_pct_filtrado['ID_Muestra'] == muestra_2][cols_conteo].iloc[0]
+            datos_grafica_2 = datos_grafica_2[datos_grafica_2 > 0].reset_index()
             datos_grafica_2.columns = ['Componente', 'Porcentaje']
+            datos_grafica_2['Muestra'] = muestra_2
 
-        datos_grafica_1['Muestra'] = muestra_1
-        datos_grafica_2['Muestra'] = muestra_2
         df_comparativo = pd.concat([datos_grafica_1, datos_grafica_2])
         
         fig_barras = px.bar(
             df_comparativo, x="Muestra", y="Porcentaje", color="Componente", 
-            text="Porcentaje", color_discrete_sequence=colores_profesionales
+            text="Porcentaje", color_discrete_map=color_map_oficial # Aplica diccionario de colores
         )
         fig_barras.update_traces(texttemplate='%{text:.1f}%', textposition='inside')
         st.plotly_chart(fig_barras, use_container_width=True)
@@ -327,7 +311,6 @@ else:
         st.markdown("---")
 
         st.subheader("🔺 Clasificación Petrológica de Cenizas (V-L-C)")
-        st.write("Agrupación estándar en Vidrio (Vitric), Líticos (Lithic) y Cristales (Crystal).")
         
         cols_vidrio = [c for c in cols_conteo if 'FV' in c.upper() or 'VIDRIO' in c.upper()]
         cols_liticos = [c for c in cols_conteo if 'LV' in c.upper() or 'LÍTICO' in c.upper() or 'LITICO' in c.upper()]
@@ -337,7 +320,6 @@ else:
         df_ternary['Vidrio'] = df_ternary[cols_vidrio].sum(axis=1) if cols_vidrio else 0
         df_ternary['Líticos'] = df_ternary[cols_liticos].sum(axis=1) if cols_liticos else 0
         df_ternary['Cristales'] = df_ternary[cols_cristales].sum(axis=1) if cols_cristales else 0
-        
         df_ternary['Suma_VLC'] = df_ternary['Vidrio'] + df_ternary['Líticos'] + df_ternary['Cristales']
         df_ternary_plot = df_ternary[df_ternary['Suma_VLC'] > 0].copy()
         
@@ -351,7 +333,6 @@ else:
                 color="Vereda", hover_name="ID_Muestra", size="Tamaño_Promedio_mm",
                 color_discrete_sequence=colores_profesionales,
             )
-            
             fig_ternary.update_layout(
                 ternary=dict(
                     sum=100,
@@ -362,20 +343,13 @@ else:
                 margin=dict(t=40, b=40, l=40, r=40)
             )
             st.plotly_chart(fig_ternary, use_container_width=True)
-            
-            with st.expander("🔍 Ver detalle de la agrupación"):
-                st.write(f"**Vidrio:** {', '.join(cols_vidrio) if cols_vidrio else 'Ninguno detectado'}")
-                st.write(f"**Líticos:** {', '.join(cols_liticos) if cols_liticos else 'Ninguno detectado'}")
-                st.write(f"**Cristales:** {', '.join(cols_cristales) if cols_cristales else 'Ninguno detectado'}")
-        else:
-            st.info("No hay datos suficientes para clasificar las muestras en el diagrama V-L-C.")
 
-        st.markdown("---")
-        
+    # --- PESTAÑA 4: SEGUIMIENTO DE TAMAÑO (NUEVA) ---
+    with tab_tamano:
         st.subheader("📈 Evolución Temporal del Tamaño de Grano")
+        st.write("Seguimiento del diámetro de las partículas a lo largo del tiempo de recolección.")
         if 'Fecha_Recoleccion' in df_filtrado.columns and 'Tamaño_Promedio_mm' in df_filtrado.columns:
             df_tiempo = df_filtrado.dropna(subset=['Fecha_Recoleccion', 'Tamaño_Promedio_mm']).sort_values(by='Fecha_Recoleccion')
-            
             if not df_tiempo.empty:
                 fig_tiempo = px.line(
                     df_tiempo, x="Fecha_Recoleccion", y="Tamaño_Promedio_mm", 
@@ -393,9 +367,9 @@ else:
         st.markdown("---")
         
         st.subheader("🔬 Relación: Tamaño de Grano vs. Mineralogía")
+        st.write("Analiza si las cenizas más gruesas están correlacionadas con un mineral en particular.")
         if 'Tamaño_Promedio_mm' in df_filtrado.columns:
             mineral_tendencia = st.selectbox("Seleccione componente a analizar:", cols_conteo, key="tendencia_mineral")
-            
             df_tendencia = df_filtrado[['ID_Muestra', 'Vereda', 'Tamaño_Promedio_mm']].copy()
             df_tendencia['Porcentaje'] = df_pct_filtrado[mineral_tendencia]
             
@@ -407,27 +381,18 @@ else:
             )
             st.plotly_chart(fig_scatter, use_container_width=True)
         else:
-            st.warning("No se encontró la columna 'Tamaño_Promedio_mm' en la base de datos.")
+            st.warning("No se encontró la columna 'Tamaño_Promedio_mm'.")
             
-    # --- PESTAÑA 4: REPORTES DE CAMPO ---
+    # --- PESTAÑA 5: REPORTES DE CAMPO ---
     with tab_reportes:
         st.subheader("Verificación Operativa")
-        st.write("Consulte los reportes de campo asociados a las muestras consolidadas.")
-        
         if 'Enlace_Reporte' in df_filtrado.columns:
             df_reportes = df_filtrado[['ID_Muestra', 'Vereda', 'Fecha_Recoleccion', 'Enlace_Reporte']].copy()
-            st.dataframe(
-                df_reportes,
-                column_config={
-                    "Enlace_Reporte": st.column_config.LinkColumn("Documento de Campo")
-                },
-                hide_index=True,
-                use_container_width=True
-            )
+            st.dataframe(df_reportes, column_config={"Enlace_Reporte": st.column_config.LinkColumn("Documento de Campo")}, hide_index=True, use_container_width=True)
         else:
             st.warning("Agregue la columna 'Enlace_Reporte' a su base de datos.")
 
-    # --- PESTAÑA 5: BASE DE DATOS ---
+    # --- PESTAÑA 6: BASE DE DATOS ---
     with tab_datos:
         st.subheader("Consolidado de Datos")
         st.dataframe(df_filtrado, use_container_width=True)
