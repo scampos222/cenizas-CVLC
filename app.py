@@ -11,7 +11,7 @@ import pydeck as pdk
 import os
 from urllib.parse import unquote, urlparse
 import numpy as np
-from scipy.interpolate import griddata
+from scipy.interpolate import griddata, Rbf
 import matplotlib.pyplot as plt
 import io
 import base64
@@ -158,10 +158,8 @@ def renderizar_kpis(df_fil, cols_conteo):
         k1.metric("Muestras Analizadas", len(df_fil))
         k2.metric("Espesor Máximo (mm)", df_fil['Espesor_Deposito_mm'].max() if 'Espesor_Deposito_mm' in df_fil.columns else "N/A")
         k3.metric("Mineral Dominante", df_fil[cols_conteo].sum().idxmax() if not df_fil[cols_conteo].empty else "N/A")
-        
         dir_dom = df_fil['Direccion_Viento'].mode()[0] if 'Direccion_Viento' in df_fil.columns and not df_fil['Direccion_Viento'].empty else "N/A"
         k4.metric("Dispersión Predominante", dir_dom)
-        
         st.markdown("---")
     except Exception as e: st.error(f"⚠️ Error al renderizar KPIs: {e}")
 
@@ -173,6 +171,15 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
             ["📍 Puntos (2D)", "🔥 Calor (2D)", "🌋 Vista 3D (Volumen)", "🎯 Isopacas (Espesor)", "🪨 Isopletas (Tamaño de Grano)"], 
             horizontal=True
         )
+        
+        # --- PARÁMETROS GEOSTADÍSTICOS AVANZADOS ---
+        metodo_interp = 'RBF (Recomendado)'
+        resolucion = 200
+        if "Isopacas" in tipo_mapa or "Isopletas" in tipo_mapa:
+            with st.expander("⚙️ Parámetros de Interpolación Geostadística"):
+                metodo_interp = st.selectbox("Algoritmo Matemático", ["RBF (Función Base Radial - Recomendado)", "Cúbica (Griddata)", "Lineal (Griddata)"])
+                resolucion = st.slider("Resolución de Malla (Grid)", min_value=100, max_value=500, value=250, step=50, help="Mayor resolución mejora la curva pero tarda más en procesar.")
+        
         st.markdown("---")
         
         df_mapa = df_fil.dropna(subset=['Latitud', 'Longitud']).copy()
@@ -185,9 +192,7 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
             if df_3d.empty: return st.warning("Sin datos de 'Espesor_Deposito_mm' para construir 3D.")
             df_3d['Elev_V'] = df_3d['Espesor_Deposito_mm'] * 150 
             capa = pdk.Layer('ColumnLayer', data=df_3d, get_position='[Longitud, Latitud]', get_elevation='Elev_V', radius=150, get_fill_color='[200, 30, 30, 180]', pickable=True, auto_highlight=True)
-            
             crater_layer = pdk.Layer('ScatterplotLayer', data=[{'lat': LAT_CRATER, 'lon': LON_CRATER}], get_position='[lon, lat]', get_color='[255, 0, 0, 255]', get_radius=500, pickable=True)
-            
             vista = pdk.ViewState(longitude=c_lon, latitude=c_lat, zoom=10.5, pitch=55, bearing=20)
             st.pydeck_chart(pdk.Deck(layers=[capa, crater_layer], initial_view_state=vista, tooltip={"html": "<b>Muestra</b>", "style": {"color": "white"}}, map_style='dark'), use_container_width=True)
             
@@ -216,23 +221,35 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                 df_mod = df_mod.groupby(['Latitud', 'Longitud'], as_index=False).agg({col_obj: 'max', 'ID_Muestra': 'first'})
                 
                 if len(df_mod) < 4:
-                    st.warning(f"⚠️ Se requieren al menos 4 puntos para generar el modelo de {col_obj}.")
+                    st.warning(f"⚠️ Se requieren al menos 4 puntos (coordenadas distintas) para generar el modelo de {col_obj}.")
                 else:
                     lon, lat, z = df_mod['Longitud'].values, df_mod['Latitud'].values, df_mod[col_obj].values
                     margen_lon, margen_lat = (lon.max() - lon.min()) * 0.2 if lon.max() != lon.min() else 0.05, (lat.max() - lat.min()) * 0.2 if lat.max() != lat.min() else 0.05
                     lim_lon_min, lim_lon_max = lon.min() - margen_lon, lon.max() + margen_lon
                     lim_lat_min, lim_lat_max = lat.min() - margen_lat, lat.max() + margen_lat
                     
-                    grid_lon, grid_lat = np.mgrid[lim_lon_min:lim_lon_max:200j, lim_lat_min:lim_lat_max:200j]
-                    try: grid_z = griddata((lon, lat), z, (grid_lon, grid_lat), method='cubic')
-                    except: grid_z = griddata((lon, lat), z, (grid_lon, grid_lat), method='linear')
+                    grid_lon, grid_lat = np.mgrid[lim_lon_min:lim_lon_max:complex(0, resolucion), lim_lat_min:lim_lat_max:complex(0, resolucion)]
+                    
+                    # --- NÚCLEO MATEMÁTICO ROBUSTO ---
+                    if "RBF" in metodo_interp:
+                        # RBF es ideal para cenizas, 'multiquadric' con smooth previene sobreajuste
+                        rbf_func = Rbf(lon, lat, z, function='multiquadric', smooth=0.1)
+                        grid_z = rbf_func(grid_lon, grid_lat)
+                    elif "Cúbica" in metodo_interp:
+                        try: grid_z = griddata((lon, lat), z, (grid_lon, grid_lat), method='cubic')
+                        except: grid_z = griddata((lon, lat), z, (grid_lon, grid_lat), method='linear')
+                    else:
+                        grid_z = griddata((lon, lat), z, (grid_lon, grid_lat), method='linear')
+                    
+                    # CLIPPING: Prevenir espesores negativos o infinitos
+                    grid_z = np.clip(grid_z, 0, z.max() * 1.2) 
                     
                     fig = plt.figure(frameon=False)
                     ax = fig.add_axes([0, 0, 1, 1])
                     ax.axis('off')
                     ax.set_xlim(lim_lon_min, lim_lon_max); ax.set_ylim(lim_lat_min, lim_lat_max)
                     cmap_choice = 'Reds' if "Isopacas" in tipo_mapa else 'viridis'
-                    ax.contourf(grid_lon, grid_lat, grid_z, alpha=0.6, cmap=cmap_choice, levels=12)
+                    ax.contourf(grid_lon, grid_lat, grid_z, alpha=0.55, cmap=cmap_choice, levels=12)
                     ax.contour(grid_lon, grid_lat, grid_z, colors='black', linewidths=0.6, levels=12) 
                     
                     buf = io.BytesIO()
@@ -241,11 +258,11 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                     img_url = f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
                     plt.close(fig)
 
-                    folium.raster_layers.ImageOverlay(image=img_url, bounds=[[lim_lat_min, lim_lon_min], [lim_lat_max, lim_lon_max]], opacity=0.75).add_to(m)
+                    folium.raster_layers.ImageOverlay(image=img_url, bounds=[[lim_lat_min, lim_lon_min], [lim_lat_max, lim_lon_max]], opacity=0.8).add_to(m)
                     for _, r in df_mod.iterrows(): folium.CircleMarker([r['Latitud'], r['Longitud']], radius=3, color="black", fill=True, popup=f"{r[col_obj]}").add_to(m)
 
-                    # --- LEYENDA DINÁMICA DE COLORES ---
-                    min_val, max_val = float(z.min()), float(z.max())
+                    # Leyenda Dinámica
+                    min_val, max_val = float(grid_z.min()), float(grid_z.max())
                     if "Isopacas" in tipo_mapa:
                         colormap = cm.LinearColormap(colors=['#FEE0D2', '#FC9272', '#DE2D26', '#99000D'], vmin=min_val, vmax=max_val)
                         colormap.caption = 'Espesor del Depósito (mm)'
@@ -268,7 +285,6 @@ def generar_pdf_reporte(m_sel, vereda, fecha, espesor, tamano, riesgo, df_graf):
     pdf.cell(200, 10, txt=f"Muestra: {m_sel}", ln=True, align='C')
     pdf.ln(10)
     
-    # Blindaje: Limpiar los emojis que la librería PDF no soporta
     riesgo_limpio = str(riesgo).replace('🟢', '').replace('🟠', '').replace('🔴', '').replace('⚪', '').strip()
     
     pdf.set_font("Arial", '', 12)
@@ -282,11 +298,9 @@ def generar_pdf_reporte(m_sel, vereda, fecha, espesor, tamano, riesgo, df_graf):
     pdf.cell(200, 10, txt="Composicion Mineralogica (%)", ln=True)
     pdf.set_font("Arial", '', 12)
     for index, row in df_graf.iterrows():
-        # Blindaje extra por si los nombres de los minerales tienen caracteres raros
         comp_limpio = str(row['Componente']).encode('latin-1', 'ignore').decode('latin-1')
         pdf.cell(200, 10, txt=f"- {comp_limpio}: {round(row['Porcentaje'], 2)}%", ln=True)
     
-    # Generar el PDF ignorando cualquier otro caracter no soportado
     pdf_output = pdf.output(dest='S').encode('latin-1', 'ignore')
     b64 = base64.b64encode(pdf_output).decode()
     return f'<a href="data:application/pdf;base64,{b64}" download="Reporte_{m_sel}.pdf" class="button" style="text-decoration:none;background-color:#2980B9;color:white;padding:8px 12px;border-radius:5px;font-size:14px;font-weight:bold;">📥 Descargar Ficha Técnica (PDF)</a>'
@@ -330,8 +344,6 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, fotos_subidas
             if PDF_DISPONIBLE:
                 pdf_html = generar_pdf_reporte(m_sel, d_crudo.get('Vereda','N/A'), f_val, f"{d_crudo.get('Espesor_Deposito_mm',0)} mm", f"{d_crudo.get('Tamaño_Promedio_mm',0)} mm", d_crudo.get('Nivel_Riesgo', 'N/A'), d_graf)
                 st.markdown(f"<div style='margin-top: 15px;'>{pdf_html}</div>", unsafe_allow_html=True)
-            else:
-                st.info("⚠️ Agrega 'fpdf' al requirements.txt para habilitar PDFs.")
 
         with col_f:
             fotos_locales = [f for f in fotos_subidas if m_sel.lower() in f.name.lower()]
