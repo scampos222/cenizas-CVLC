@@ -120,7 +120,6 @@ def obtener_url_imagen(url_original):
 @st.cache_data(show_spinner="Descargando y optimizando base de datos...")
 def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     df_temp = None
-    
     if usar_sql:
         try:
             conn = st.connection("sql")
@@ -227,126 +226,151 @@ def renderizar_kpis(df_fil, cols_conteo):
         st.markdown("---")
     except Exception as e: st.error(f"⚠️ Error al renderizar KPIs: {e}")
 
+# --- SUB-ESTRUCTURACIÓN DEL MÓDULO ESPACIAL ---
 def renderizar_modulo_espacial(df_fil, archivo_geo):
     try:
-        st.subheader("Cartografía y Modelamiento Matemático/Predictivo")
-        tipo_mapa = st.radio("Seleccione la vista espacial:", ["📍 Puntos (2D)", "🔥 Calor (2D)", "🌋 Vista 3D (Volumen)", "🎯 Isopacas (Espesor)", "🪨 Isopletas (Tamaño)", "🤖 IA: Predicción", "⏳ Time-Lapse (Animación)"], horizontal=True)
+        st.subheader("Análisis Geoespacial y Predictivo")
+        st.markdown("<small><i>Navega por las pestañas para ver las diferentes capas y modelos generados.</i></small>", unsafe_allow_html=True)
         
-        metodo_interp = 'RBF (Recomendado)'
-        resolucion = 200
-        if "Isopacas" in tipo_mapa or "Isopletas" in tipo_mapa:
-            with st.expander("⚙️ Parámetros de Interpolación Geostadística"):
-                metodo_interp = st.selectbox("Algoritmo Matemático", ["RBF (Función Base Radial - Recomendado)", "Cúbica (Griddata)", "Lineal (Griddata)"])
-                resolucion = st.slider("Resolución de Malla (Grid)", min_value=100, max_value=500, value=250, step=50)
-        
-        st.markdown("---")
         df_mapa = df_fil.dropna(subset=['Latitud', 'Longitud']).copy()
         if df_mapa.empty: return st.warning("No hay datos con coordenadas válidas.")
-        
         c_lat, c_lon = df_mapa['Latitud'].mean(), df_mapa['Longitud'].mean()
 
-        # --- NUEVO: ANIMACIÓN TIME-LAPSE ---
-        if "Time-Lapse" in tipo_mapa:
-            df_time = df_mapa.dropna(subset=['Fecha_Recoleccion', 'Espesor_Deposito_mm']).copy()
-            if df_time.empty: return st.warning("No hay datos de fecha para animar.")
-            df_time = df_time.sort_values('Fecha_Recoleccion')
-            df_time['Fecha_Str'] = df_time['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d')
+        # Creación de sub-pestañas internas
+        tab_base, tab_geo, tab_sim = st.tabs(["🗺️ Cartografía Base", "📐 Modelos (Isopacas/Isopletas)", "🤖 Simulaciones (IA/Tiempo)"])
+        
+        # ------------------------------------
+        # 1. PESTAÑA: CARTOGRAFÍA BASE
+        # ------------------------------------
+        with tab_base:
+            tipo_mapa_base = st.radio("Capa a visualizar:", ["📍 Puntos (2D)", "🔥 Dispersión (2D)", "🌋 Vista 3D (Volumen)"], horizontal=True)
             
-            fig_tl = px.scatter_mapbox(df_time, lat="Latitud", lon="Longitud", 
-                                    color="Espesor_Deposito_mm", size="Espesor_Deposito_mm",
-                                    animation_frame="Fecha_Str", hover_name="ID_Muestra",
-                                    color_continuous_scale="Reds", size_max=25, zoom=10,
-                                    mapbox_style="carto-positron", center={"lat": LAT_CRATER, "lon": LON_CRATER},
-                                    title="Evolución Espacio-Temporal del Depósito de Ceniza")
-            fig_tl.update_layout(margin={"r":0,"t":40,"l":0,"b":0}, height=600)
-            st.plotly_chart(fig_tl, use_container_width=True)
-
-        elif "IA: Predicción" in tipo_mapa:
-            if not ML_DISPONIBLE: return st.error("⚠️ La librería scikit-learn no está instalada. Añádela al requirements.txt")
-            
-            st.info("🧠 **Red Neuronal / Random Forest:** La IA simula el espesor de la ceniza en zonas sin muestreo.")
-            df_ml = df_mapa.dropna(subset=['Espesor_Deposito_mm', 'Distancia_Crater_km']).copy()
-            if len(df_ml) < 4: return st.warning("Se requieren al menos 4 muestras para entrenar la Inteligencia Artificial.")
-            
-            X = df_ml[['Latitud', 'Longitud', 'Distancia_Crater_km']]
-            y = df_ml['Espesor_Deposito_mm']
-            
-            modelo_rf = RandomForestRegressor(n_estimators=100, random_state=42)
-            modelo_rf.fit(X, y)
-            
-            lon_min, lon_max = df_ml['Longitud'].min() - 0.05, df_ml['Longitud'].max() + 0.05
-            lat_min, lat_max = df_ml['Latitud'].min() - 0.05, df_ml['Latitud'].max() + 0.05
-            grid_lon, grid_lat = np.mgrid[lon_min:lon_max:100j, lat_min:lat_max:100j]
-            
-            distancias_grid, _ = operaciones_geoespaciales_vectorizadas(grid_lat.flatten(), grid_lon.flatten())
-            X_pred = pd.DataFrame({'Latitud': grid_lat.flatten(), 'Longitud': grid_lon.flatten(), 'Distancia_Crater_km': distancias_grid})
-            
-            predicciones = modelo_rf.predict(X_pred)
-            grid_z_rf = predicciones.reshape(grid_lon.shape)
-            
-            fig_rf = go.Figure(data=go.Contour(z=grid_z_rf.T, x=grid_lon[:,0], y=grid_lat[0,:], colorscale='Reds', contours=dict(showlabels=True), name="Espesor Previsto"))
-            fig_rf.add_trace(go.Scatter(x=df_ml['Longitud'], y=df_ml['Latitud'], mode='markers', marker=dict(color='black', symbol='x', size=8), name='Datos Entrenamiento'))
-            fig_rf.add_trace(go.Scatter(x=[LON_CRATER], y=[LAT_CRATER], mode='markers', marker=dict(color='red', symbol='triangle-up', size=14), name='Cráter'))
-            fig_rf.update_layout(height=600, xaxis_title="Longitud", yaxis_title="Latitud", plot_bgcolor='#FAFAFA')
-            st.plotly_chart(fig_rf, use_container_width=True)
-
-        elif "3D" in tipo_mapa:
-            df_3d = df_mapa.dropna(subset=['Espesor_Deposito_mm']).copy()
-            if df_3d.empty: return st.warning("Sin datos de espesor para construir 3D.")
-            df_3d['Elev_V'] = df_3d['Espesor_Deposito_mm'] * 150 
-            capa = pdk.Layer('ColumnLayer', data=df_3d, get_position='[Longitud, Latitud]', get_elevation='Elev_V', radius=150, get_fill_color='[200, 30, 30, 180]', pickable=True, auto_highlight=True)
-            crater_layer = pdk.Layer('ScatterplotLayer', data=[{'lat': LAT_CRATER, 'lon': LON_CRATER}], get_position='[lon, lat]', get_color='[255, 0, 0, 255]', get_radius=500, pickable=True)
-            vista = pdk.ViewState(longitude=c_lon, latitude=c_lat, zoom=10.5, pitch=55, bearing=20)
-            st.pydeck_chart(pdk.Deck(layers=[capa, crater_layer], initial_view_state=vista, tooltip={"html": "<b>Muestra</b>", "style": {"color": "white"}}, map_style='dark'), use_container_width=True)
-            
-        else:
-            m = folium.Map(location=[c_lat, c_lon], zoom_start=11, tiles='CartoDB positron')
-            folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', attr='Esri', overlay=False).add_to(m)
-            folium.Marker([LAT_CRATER, LON_CRATER], tooltip="🌋 Cráter Volcán Puracé", icon=folium.Icon(color="red", icon="fire")).add_to(m)
-            if archivo_geo: folium.GeoJson(json.load(archivo_geo), style_function=lambda f: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5, 'fillOpacity': 0.15}).add_to(m)
-            
-            if "Puntos" in tipo_mapa:
-                mc = MarkerCluster().add_to(m)
-                for _, r in df_mapa.iterrows():
-                    html = f"<b>{r.get('ID_Muestra', 'N/A')}</b><br>Espesor: {r.get('Espesor_Deposito_mm', 0)} mm<br>Distancia: {r.get('Distancia_Crater_km', 0)} km"
-                    folium.Marker([r['Latitud'], r['Longitud']], popup=folium.Popup(html, max_width=250), tooltip=str(r.get('ID_Muestra', '')), icon=folium.Icon(color="darkblue", icon="info-sign")).add_to(mc)
-            
-            elif "Calor" in tipo_mapa:
-                h_data = df_mapa.dropna(subset=['Espesor_Deposito_mm'])
-                if not h_data.empty: HeatMap([[r['Latitud'], r['Longitud'], r['Espesor_Deposito_mm']*2] for _, r in h_data.iterrows()], radius=25, blur=15).add_to(m)
-            
-            elif "Isopacas" in tipo_mapa or "Isopletas" in tipo_mapa:
-                col_obj = 'Espesor_Deposito_mm' if "Isopacas" in tipo_mapa else 'Tamaño_Promedio_mm'
-                df_mod = df_mapa.dropna(subset=['Latitud', 'Longitud', col_obj]).copy()
-                df_mod = df_mod.groupby(['Latitud', 'Longitud'], as_index=False).agg({col_obj: 'max', 'ID_Muestra': 'first'})
-                
-                if len(df_mod) < 4: st.warning(f"⚠️ Se requieren al menos 4 puntos para {col_obj}.")
+            if "3D" in tipo_mapa_base:
+                df_3d = df_mapa.dropna(subset=['Espesor_Deposito_mm']).copy()
+                if df_3d.empty: st.warning("Sin datos de 'Espesor_Deposito_mm' para construir 3D.")
                 else:
-                    lon, lat, z = df_mod['Longitud'].values, df_mod['Latitud'].values, df_mod[col_obj].values
-                    grid_lon, grid_lat, grid_z, l_lon_min, l_lon_max, l_lat_min, l_lat_max = calcular_modelo_espacial(lon, lat, z, metodo_interp, resolucion)
+                    df_3d['Elev_V'] = df_3d['Espesor_Deposito_mm'] * 150 
+                    capa = pdk.Layer('ColumnLayer', data=df_3d, get_position='[Longitud, Latitud]', get_elevation='Elev_V', radius=150, get_fill_color='[200, 30, 30, 180]', pickable=True, auto_highlight=True)
+                    crater_layer = pdk.Layer('ScatterplotLayer', data=[{'lat': LAT_CRATER, 'lon': LON_CRATER}], get_position='[lon, lat]', get_color='[255, 0, 0, 255]', get_radius=500, pickable=True)
+                    vista = pdk.ViewState(longitude=c_lon, latitude=c_lat, zoom=10.5, pitch=55, bearing=20)
+                    st.pydeck_chart(pdk.Deck(layers=[capa, crater_layer], initial_view_state=vista, tooltip={"html": "<b>Muestra</b>", "style": {"color": "white"}}, map_style='dark'), use_container_width=True)
+            else:
+                m_base = folium.Map(location=[c_lat, c_lon], zoom_start=11, tiles='CartoDB positron')
+                folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', attr='Esri', overlay=False).add_to(m_base)
+                folium.Marker([LAT_CRATER, LON_CRATER], tooltip="🌋 Cráter Volcán Puracé", icon=folium.Icon(color="red", icon="fire")).add_to(m_base)
+                
+                if archivo_geo: folium.GeoJson(json.load(archivo_geo), style_function=lambda f: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5, 'fillOpacity': 0.15}).add_to(m_base)
+                
+                if "Puntos" in tipo_mapa_base:
+                    mc = MarkerCluster().add_to(m_base)
+                    for _, r in df_mapa.iterrows():
+                        html = f"<b>{r.get('ID_Muestra', 'N/A')}</b><br>Espesor: {r.get('Espesor_Deposito_mm', 0)} mm<br>Distancia: {r.get('Distancia_Crater_km', 0)} km"
+                        folium.Marker([r['Latitud'], r['Longitud']], popup=folium.Popup(html, max_width=250), tooltip=str(r.get('ID_Muestra', '')), icon=folium.Icon(color="darkblue", icon="info-sign")).add_to(mc)
+                
+                elif "Dispersión" in tipo_mapa_base:
+                    h_data = df_mapa.dropna(subset=['Espesor_Deposito_mm'])
+                    if not h_data.empty:
+                        HeatMap([[r['Latitud'], r['Longitud'], r['Espesor_Deposito_mm']*2] for _, r in h_data.iterrows()], radius=25, blur=15).add_to(m_base)
+                        # Agregar leyenda a la dispersión
+                        min_v, max_v = float(h_data['Espesor_Deposito_mm'].min()), float(h_data['Espesor_Deposito_mm'].max())
+                        colormap = cm.LinearColormap(colors=['blue', 'cyan', 'lime', 'yellow', 'red'], vmin=min_v, vmax=max_v)
+                        colormap.caption = 'Intensidad de Dispersión (Espesor en mm)'
+                        m_base.add_child(colormap)
+
+                st_folium(m_base, width="100%", height=600, key="mapa_base")
+
+        # ------------------------------------
+        # 2. PESTAÑA: MODELOS (GEOSTADÍSTICA)
+        # ------------------------------------
+        with tab_geo:
+            tipo_mapa_geo = st.radio("Modelo Matemático:", ["🎯 Isopacas (Espesor)", "🪨 Isopletas (Tamaño)"], horizontal=True)
+            with st.expander("⚙️ Parámetros de Interpolación Geostadística"):
+                metodo_interp = st.selectbox("Algoritmo Matemático", ["RBF (Función Base Radial - Recomendado)", "Cúbica (Griddata)", "Lineal (Griddata)"], key="geo_algo")
+                resolucion = st.slider("Resolución de Malla (Grid)", min_value=100, max_value=500, value=250, step=50, key="geo_res")
+            
+            col_obj = 'Espesor_Deposito_mm' if "Isopacas" in tipo_mapa_geo else 'Tamaño_Promedio_mm'
+            df_mod = df_mapa.dropna(subset=['Latitud', 'Longitud', col_obj]).copy()
+            df_mod = df_mod.groupby(['Latitud', 'Longitud'], as_index=False).agg({col_obj: 'max', 'ID_Muestra': 'first'})
+            
+            if len(df_mod) < 4: st.warning(f"⚠️ Se requieren al menos 4 puntos para {col_obj}.")
+            else:
+                lon, lat, z = df_mod['Longitud'].values, df_mod['Latitud'].values, df_mod[col_obj].values
+                grid_lon, grid_lat, grid_z, l_lon_min, l_lon_max, l_lat_min, l_lat_max = calcular_modelo_espacial(lon, lat, z, metodo_interp, resolucion)
+                
+                fig = plt.figure(frameon=False)
+                ax = fig.add_axes([0, 0, 1, 1])
+                ax.axis('off'); ax.set_xlim(l_lon_min, l_lon_max); ax.set_ylim(l_lat_min, l_lat_max)
+                cmap_choice = 'Reds' if "Isopacas" in tipo_mapa_geo else 'viridis'
+                ax.contourf(grid_lon, grid_lat, grid_z, alpha=0.55, cmap=cmap_choice, levels=12)
+                ax.contour(grid_lon, grid_lat, grid_z, colors='black', linewidths=0.6, levels=12) 
+                
+                buf = io.BytesIO()
+                plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0, transparent=True)
+                buf.seek(0)
+                img_url = f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
+                plt.close(fig); buf.close()
+
+                m_geo = folium.Map(location=[c_lat, c_lon], zoom_start=11, tiles='CartoDB positron')
+                folium.Marker([LAT_CRATER, LON_CRATER], tooltip="🌋 Cráter Volcán Puracé", icon=folium.Icon(color="red", icon="fire")).add_to(m_geo)
+                folium.raster_layers.ImageOverlay(image=img_url, bounds=[[l_lat_min, l_lon_min], [l_lat_max, l_lon_max]], opacity=0.8).add_to(m_geo)
+                for _, r in df_mod.iterrows(): folium.CircleMarker([r['Latitud'], r['Longitud']], radius=3, color="black", fill=True).add_to(m_geo)
+
+                colormap = cm.LinearColormap(colors=['#FEE0D2', '#FC9272', '#DE2D26', '#99000D'] if "Isopacas" in tipo_mapa_geo else ['#440154', '#31688E', '#35B779', '#FDE725'], vmin=float(grid_z.min()), vmax=float(grid_z.max()))
+                colormap.caption = f"{col_obj} (mm)"
+                m_geo.add_child(colormap)
+                
+                st_folium(m_geo, width="100%", height=600, key="mapa_geo")
+
+        # ------------------------------------
+        # 3. PESTAÑA: SIMULACIONES (IA / TIEMPO)
+        # ------------------------------------
+        with tab_sim:
+            tipo_mapa_sim = st.radio("Motor de Simulación:", ["⏳ Time-Lapse (Animación Histórica)", "🤖 IA: Predicción (Random Forest)"], horizontal=True)
+            
+            if "Time-Lapse" in tipo_mapa_sim:
+                df_time = df_mapa.dropna(subset=['Fecha_Recoleccion', 'Espesor_Deposito_mm']).copy()
+                if df_time.empty: st.warning("No hay datos de fecha para animar.")
+                else:
+                    df_time = df_time.sort_values('Fecha_Recoleccion')
+                    df_time['Fecha_Str'] = df_time['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d')
                     
-                    fig = plt.figure(frameon=False)
-                    ax = fig.add_axes([0, 0, 1, 1])
-                    ax.axis('off'); ax.set_xlim(l_lon_min, l_lon_max); ax.set_ylim(l_lat_min, l_lat_max)
-                    cmap_choice = 'Reds' if "Isopacas" in tipo_mapa else 'viridis'
-                    ax.contourf(grid_lon, grid_lat, grid_z, alpha=0.55, cmap=cmap_choice, levels=12)
-                    ax.contour(grid_lon, grid_lat, grid_z, colors='black', linewidths=0.6, levels=12) 
-                    
-                    buf = io.BytesIO()
-                    plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0, transparent=True)
-                    buf.seek(0)
-                    img_url = f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
-                    plt.close(fig); buf.close()
+                    fig_tl = px.scatter_mapbox(df_time, lat="Latitud", lon="Longitud", 
+                                            color="Espesor_Deposito_mm", size="Espesor_Deposito_mm",
+                                            animation_frame="Fecha_Str", hover_name="ID_Muestra",
+                                            color_continuous_scale="Reds", size_max=25, zoom=10,
+                                            mapbox_style="carto-positron", center={"lat": LAT_CRATER, "lon": LON_CRATER},
+                                            title="Evolución Espacio-Temporal del Depósito de Ceniza")
+                    fig_tl.update_layout(margin={"r":0,"t":40,"l":0,"b":0}, height=600)
+                    st.plotly_chart(fig_tl, use_container_width=True)
 
-                    folium.raster_layers.ImageOverlay(image=img_url, bounds=[[l_lat_min, l_lon_min], [l_lat_max, l_lon_max]], opacity=0.8).add_to(m)
-                    for _, r in df_mod.iterrows(): folium.CircleMarker([r['Latitud'], r['Longitud']], radius=3, color="black", fill=True).add_to(m)
-
-                    colormap = cm.LinearColormap(colors=['#FEE0D2', '#FC9272', '#DE2D26', '#99000D'] if "Isopacas" in tipo_mapa else ['#440154', '#31688E', '#35B779', '#FDE725'], vmin=float(grid_z.min()), vmax=float(grid_z.max()))
-                    colormap.caption = f"{col_obj} (mm)"
-                    m.add_child(colormap)
-
-            folium.LayerControl().add_to(m)
-            st_folium(m, width="100%", height=600)
+            elif "IA: Predicción" in tipo_mapa_sim:
+                if not ML_DISPONIBLE: st.error("⚠️ La librería scikit-learn no está instalada. Añádela al requirements.txt")
+                else:
+                    st.info("🧠 **Red Neuronal / Random Forest:** La IA simula el espesor de la ceniza en zonas sin muestreo.")
+                    df_ml = df_mapa.dropna(subset=['Espesor_Deposito_mm', 'Distancia_Crater_km']).copy()
+                    if len(df_ml) < 4: st.warning("Se requieren al menos 4 muestras para entrenar la Inteligencia Artificial.")
+                    else:
+                        X = df_ml[['Latitud', 'Longitud', 'Distancia_Crater_km']]
+                        y = df_ml['Espesor_Deposito_mm']
+                        
+                        modelo_rf = RandomForestRegressor(n_estimators=100, random_state=42)
+                        modelo_rf.fit(X, y)
+                        
+                        lon_min, lon_max = df_ml['Longitud'].min() - 0.05, df_ml['Longitud'].max() + 0.05
+                        lat_min, lat_max = df_ml['Latitud'].min() - 0.05, df_ml['Latitud'].max() + 0.05
+                        grid_lon, grid_lat = np.mgrid[lon_min:lon_max:100j, lat_min:lat_max:100j]
+                        
+                        distancias_grid, _ = operaciones_geoespaciales_vectorizadas(grid_lat.flatten(), grid_lon.flatten())
+                        X_pred = pd.DataFrame({'Latitud': grid_lat.flatten(), 'Longitud': grid_lon.flatten(), 'Distancia_Crater_km': distancias_grid})
+                        
+                        predicciones = modelo_rf.predict(X_pred)
+                        grid_z_rf = predicciones.reshape(grid_lon.shape)
+                        
+                        fig_rf = go.Figure(data=go.Contour(z=grid_z_rf.T, x=grid_lon[:,0], y=grid_lat[0,:], colorscale='Reds', contours=dict(showlabels=True), name="Espesor Previsto"))
+                        fig_rf.add_trace(go.Scatter(x=df_ml['Longitud'], y=df_ml['Latitud'], mode='markers', marker=dict(color='black', symbol='x', size=8), name='Datos Entrenamiento'))
+                        fig_rf.add_trace(go.Scatter(x=[LON_CRATER], y=[LAT_CRATER], mode='markers', marker=dict(color='red', symbol='triangle-up', size=14), name='Cráter'))
+                        fig_rf.update_layout(height=600, xaxis_title="Longitud", yaxis_title="Latitud", plot_bgcolor='#FAFAFA')
+                        st.plotly_chart(fig_rf, use_container_width=True)
 
     except Exception as e: st.error(f"⚠️ Error al renderizar el módulo espacial: {e}")
 
@@ -522,20 +546,19 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, fotos_subidas
         
         with c_dec:
             if 'Distancia_Crater_km' in df_fil.columns and 'Espesor_Deposito_mm' in df_fil.columns:
-                # --- CÁLCULO AUTOMÁTICO DE VOLUMEN Y VEI ---
                 df_vol = df_fil.dropna(subset=['Distancia_Crater_km', 'Espesor_Deposito_mm'])
                 df_vol = df_vol[df_vol['Espesor_Deposito_mm'] > 0]
                 if len(df_vol) > 3:
                     try:
                         x_val = df_vol['Distancia_Crater_km'].values
-                        y_val = df_vol['Espesor_Deposito_mm'].values / 1e6 # Pasar mm a km
+                        y_val = df_vol['Espesor_Deposito_mm'].values / 1e6 
                         slope, intercept = np.polyfit(x_val, np.log(y_val), 1)
                         k = -slope
                         y0 = np.exp(intercept)
                         if k > 0:
                             vol_km3 = (2 * np.pi * y0) / (k**2)
                             vei = 1 if vol_km3 < 0.0001 else 2 if vol_km3 < 0.001 else 3 if vol_km3 < 0.01 else 4 if vol_km3 < 0.1 else 5 if vol_km3 < 1 else "6+"
-                            st.success(f"🌋 **Estimación Magmática (Modelo Exponencial Fierstein):** Volumen: **~{vol_km3:.6f} km³** | VEI Estimado: **{vei}**")
+                            st.success(f"🌋 **Estimación Magmática (Modelo Exponencial):** Volumen: **~{vol_km3:.6f} km³** | VEI Estimado: **{vei}**")
                     except: pass
                 
                 fig_decay = px.scatter(df_fil, x="Distancia_Crater_km", y="Espesor_Deposito_mm", color="Vereda", size="Tamaño_Promedio_mm", hover_name="ID_Muestra", title="Decaimiento del Espesor vs. Distancia")
@@ -553,19 +576,18 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, fotos_subidas
 
 def renderizar_modulo_operativo(df_fil):
     try:
-        # --- NUEVO: MÓDULO QA/QC (Salud de Datos) ---
         st.subheader("🛡️ Control de Calidad (QA/QC) Automático")
         errores = []
         fuera_limites = df_fil[(df_fil['Latitud'] > 5) | (df_fil['Latitud'] < -5) | (df_fil['Longitud'] > -70) | (df_fil['Longitud'] < -80)]
-        if not fuera_limites.empty: errores.append(f"{len(fuera_limites)} muestras con coordenadas fuera del suroccidente de Colombia.")
+        if not fuera_limites.empty: errores.append(f"{len(fuera_limites)} muestras con coordenadas anómalas.")
         esp_cero = df_fil[df_fil['Espesor_Deposito_mm'] <= 0]
         if not esp_cero.empty: errores.append(f"{len(esp_cero)} muestras tienen espesor 0 o negativo.")
         sin_minerales = df_fil[df_fil['Total_Granos'] == 0]
-        if not sin_minerales.empty: errores.append(f"{len(sin_minerales)} muestras no tienen conteo mineralógico.")
+        if not sin_minerales.empty: errores.append(f"{len(sin_minerales)} muestras sin conteo mineralógico.")
 
         if errores:
-            for err in errores: st.error(f"🔴 ERROR QA/QC: {err}")
-        else: st.success("🟢 ¡QA/QC Aprobado! Todos los datos de esta vista tienen integridad total y estructura limpia.")
+            for err in errores: st.error(f"🔴 ALERTA QA/QC: {err}")
+        else: st.success("🟢 ¡QA/QC Aprobado! Integridad total de datos confirmada.")
 
         st.markdown("---")
         st.subheader("Semáforo de Gestión del Riesgo y Operaciones")
