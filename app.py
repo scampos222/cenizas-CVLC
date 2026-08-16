@@ -58,35 +58,78 @@ df_pct = df.copy()
 for col in cols_conteo:
     df_pct[col] = (df[col] / df['Total_Granos']).fillna(0) * 100
 
-# 3. FILTROS AVANZADOS
+# ==========================================
+# 3. FILTROS AVANZADOS EN LA BARRA LATERAL
+# ==========================================
 st.sidebar.markdown("---")
-st.sidebar.subheader("Filtros Espaciales y Temporales")
+st.sidebar.subheader("⚙️ Filtros Espaciales y Temporales")
 
-# Filtro Vereda
+# --- FILTRO 1: VEREDAS (Con control rápido) ---
 if 'Vereda' in df.columns:
-    veredas_unicas = df['Vereda'].dropna().unique().tolist()
-    veredas_seleccionadas = st.sidebar.multiselect("Localidad / Vereda:", veredas_unicas, default=veredas_unicas)
+    veredas_unicas = sorted(df['Vereda'].dropna().unique().tolist())
+    
+    # Botones de gestión rápida para veredas
+    col_v1, col_v2 = st.sidebar.columns(2)
+    with col_v1:
+        if st.button("Todas", key="btn_todas_veredas", use_container_width=True):
+            st.session_state["veredas_selected"] = veredas_unicas
+    with col_v2:
+        if st.button("Limpiar", key="btn_ninguna_vereda", use_container_width=True):
+            st.session_state["veredas_selected"] = []
+
+    if "veredas_selected" not in st.session_state:
+        st.session_state["veredas_selected"] = veredas_unicas
+
+    veredas_seleccionadas = st.sidebar.multiselect(
+        "Localidad / Vereda:",
+        options=veredas_unicas,
+        default=st.session_state["veredas_selected"],
+        key="veredas_multiselect"
+    )
 else:
     veredas_seleccionadas = []
 
-# Filtro Fecha
+# --- FILTRO 2: FECHA POR AÑO Y MES ---
 if 'Fecha_Recoleccion' in df.columns and not df['Fecha_Recoleccion'].isnull().all():
-    min_date = df['Fecha_Recoleccion'].min().date()
-    max_date = df['Fecha_Recoleccion'].max().date()
-    fechas = st.sidebar.date_input("Rango de recolección:", [min_date, max_date], min_value=min_date, max_value=max_date)
-    
-    if len(fechas) == 2:
-        mask_fecha = (df['Fecha_Recoleccion'].dt.date >= fechas[0]) & (df['Fecha_Recoleccion'].dt.date <= fechas[1])
+    # Asegurar formato datetime y extraer metadatos
+    df['Anio'] = df['Fecha_Recoleccion'].dt.year
+    df['Mes_Num'] = df['Fecha_Recoleccion'].dt.month
+
+    dic_meses = {
+        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
+        7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+    }
+
+    # Años disponibles en la base de datos
+    anios_disponibles = ["Todos los Años"] + sorted([int(a) for a in df['Anio'].dropna().unique()], reverse=True)
+    anio_sel = st.sidebar.selectbox("Año de Recolección:", anios_disponibles)
+
+    # Filtrar meses según el año seleccionado
+    if anio_sel != "Todos los Años":
+        df_anio = df[df['Anio'] == anio_sel]
+        meses_nums = sorted(df_anio['Mes_Num'].dropna().unique())
+        opciones_meses = ["Todos los Meses"] + [dic_meses[m] for m in meses_nums]
     else:
-        mask_fecha = pd.Series(True, index=df.index)
+        opciones_meses = ["Todos los Meses"] + [dic_meses[m] for m in range(1, 13)]
+
+    mes_sel = st.sidebar.selectbox("Mes de Recolección:", opciones_meses)
+
+    # Construcción de la máscara lógica de fechas
+    mask_fecha = pd.Series(True, index=df.index)
+    if anio_sel != "Todos los Años":
+        mask_fecha = mask_fecha & (df['Anio'] == anio_sel)
+    if mes_sel != "Todos los Meses":
+        # Invertir diccionario para buscar el número del mes elegido
+        num_mes_elegido = [k for k, v in dic_meses.items() if v == mes_sel][0]
+        mask_fecha = mask_fecha & (df['Mes_Num'] == num_mes_elegido)
 else:
     mask_fecha = pd.Series(True, index=df.index)
 
-# Aplicar filtros
+# --- APLICACIÓN GENERAL DE FILTROS ---
 mask_vereda = df['Vereda'].isin(veredas_seleccionadas) if veredas_seleccionadas else pd.Series(True, index=df.index)
+
 df_filtrado = df[mask_vereda & mask_fecha]
 df_pct_filtrado = df_pct[mask_vereda & mask_fecha]
-
 # Paleta de colores profesional
 colores_profesionales = px.colors.qualitative.Pastel
 
