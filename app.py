@@ -17,15 +17,20 @@ st.set_page_config(page_title="AshViewer-CVLC", layout="wide")
 
 st.markdown("""
     <style>
-    .main {background-color: #FAFAFA;}
-    h1, h2, h3 {color: #2C3E50;}
+    /* Corrección de colores para que sean legibles en Modo Claro y Oscuro */
+    .main {background-color: transparent;}
+    
     /* Estilo para las tarjetas de KPIs */
     div[data-testid="metric-container"] {
-        background-color: #FFFFFF;
-        border: 1px solid #EAEAEA;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
+        background-color: #FFFFFF !important;
+        border: 1px solid #EAEAEA !important;
+        padding: 15px !important;
+        border-radius: 10px !important;
+        box-shadow: 2px 2px 5px rgba(0,0,0,0.05) !important;
+    }
+    /* Forzar que el texto de los KPIs siempre sea oscuro */
+    div[data-testid="metric-container"] * {
+        color: #2C3E50 !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -205,9 +210,8 @@ else:
 
     st.markdown("---")
     
-    # AHORA SON SOLO 4 PESTAÑAS PRINCIPALES
-    tab_mapa, tab_comp, tab_analisis, tab_tamano = st.tabs([
-        "Mapa de Distribución", "Análisis de Muestra", "Análisis Avanzado", "Seguimiento de Tamaño"
+    tab_mapa, tab_comp, tab_analisis, tab_tamano, tab_datos = st.tabs([
+        "Mapa de Distribución", "Análisis de Muestra", "Análisis Avanzado", "Seguimiento de Tamaño", "➕ Datos y Reportes"
     ])
 
     # --- PESTAÑA 1: MAPAS ESPACIALES ---
@@ -354,6 +358,7 @@ else:
             if eventos_grafica and "selection" in eventos_grafica and eventos_grafica["selection"]["points"]:
                 mineral_cliqueado = eventos_grafica["selection"]["points"][0]["label"]
 
+            # --- AQUÍ ESTÁ LA CORRECCIÓN: color:#1C2833 forzado ---
             vereda_val = datos_m_crudos.get('Vereda', 'N/A')
             fecha_val = pd.to_datetime(datos_m_crudos['Fecha_Recoleccion']).strftime('%Y-%m-%d') if 'Fecha_Recoleccion' in datos_m_crudos and pd.notna(datos_m_crudos['Fecha_Recoleccion']) else 'N/A'
             tamano_val = f"{datos_m_crudos.get('Tamaño_Promedio_mm', 'N/A')} mm"
@@ -361,8 +366,8 @@ else:
             total_granos_val = datos_m_crudos.get('Total_Granos', 'N/A')
 
             st.markdown(f"""
-            <div style="background-color:#EBF5FB; padding:15px; border-radius:10px; margin-top:10px; font-size: 14.5px; border-left: 5px solid #2980B9;">
-                <b style="color:#2C3E50; font-size:16px;">📋 Detalles de Campo</b><br><br>
+            <div style="background-color:#EBF5FB; padding:15px; border-radius:10px; margin-top:10px; font-size: 14.5px; border-left: 5px solid #2980B9; color:#1C2833;">
+                <b style="color:#1C2833; font-size:16px;">📋 Detalles de Campo</b><br><br>
                 <b>📍 Vereda:</b> {vereda_val} &nbsp;&nbsp;|&nbsp;&nbsp; <b>📅 Fecha:</b> {fecha_val}<br>
                 <b>📏 Tamaño:</b> {tamano_val} &nbsp;&nbsp;|&nbsp;&nbsp; <b>🔥 Espesor:</b> {espesor_val}<br>
                 <b>🔬 Total Granos:</b> {total_granos_val}
@@ -508,12 +513,9 @@ else:
         else:
             st.warning("No se encontró la columna 'Tamaño_Promedio_mm'.")
 
-    # ==========================================
-    # SECCIÓN DESPLEGABLE: DATOS CRUDOS Y REPORTES
-    # ==========================================
-    st.markdown("---")
-    with st.expander("➕ Mostrar Datos Crudos y Reportes de Campo"):
-        st.subheader("Verificación Operativa")
+    # --- PESTAÑA 5: DATOS Y REPORTES ---
+    with tab_datos:
+        st.subheader("Verificación Operativa y Reportes")
         if 'Enlace_Reporte' in df_filtrado.columns:
             df_reportes = df_filtrado[['ID_Muestra', 'Vereda', 'Fecha_Recoleccion', 'Enlace_Reporte']].copy()
             st.dataframe(df_reportes, column_config={"Enlace_Reporte": st.column_config.LinkColumn("Documento de Campo")}, hide_index=True, use_container_width=True)
@@ -521,5 +523,6 @@ else:
             st.warning("Agregue la columna 'Enlace_Reporte' a su base de datos.")
 
         st.markdown("---")
-        st.subheader("Consolidado de Datos")
+        
+        st.subheader("Consolidado de Datos (Base Cruda)")
         st.dataframe(df_filtrado, use_container_width=True)
