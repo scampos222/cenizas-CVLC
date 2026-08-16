@@ -11,14 +11,13 @@ import pydeck as pdk
 import os
 from urllib.parse import unquote, urlparse
 import numpy as np
-from scipy.interpolate import griddata
+from scipy.interpolate import griddata, Rbf
 import matplotlib.pyplot as plt
 import io
 import base64
 import math
 import branca.colormap as cm
 
-# Intento de importar FPDF de forma segura
 try:
     from fpdf import FPDF
     PDF_DISPONIBLE = True
@@ -50,40 +49,46 @@ color_map_oficial = {
 }
 colores_profesionales = px.colors.qualitative.Pastel
 
-# Coordenadas del Cráter (Volcán Puracé)
 LAT_CRATER = 2.313377
 LON_CRATER = -76.395088
 
 # ==========================================
-# 2. FUNCIONES MATEMÁTICAS Y AUXILIARES
+# 2. FUNCIONES MATEMÁTICAS VECTORIZADAS (NUEVO HPC)
 # ==========================================
-def calcular_azimut_y_direccion(lat2, lon2):
-    lat1, lon1, lat2_rad, lon2_rad = map(math.radians, [LAT_CRATER, LON_CRATER, lat2, lon2])
-    dlon = lon2_rad - lon1
-    x = math.sin(dlon) * math.cos(lat2_rad)
-    y = math.cos(lat1) * math.sin(lat2_rad) - (math.sin(lat1) * math.cos(lat2_rad) * math.cos(dlon))
-    initial_bearing = math.atan2(x, y)
-    brng = (math.degrees(initial_bearing) + 360) % 360
+def operaciones_geoespaciales_vectorizadas(lats, lons):
+    """Calcula distancias Haversine y Azimut de manera vectorial en microsegundos"""
+    R = 6371.0 
+    lat1, lon1, lat2, lon2 = map(np.radians, [LAT_CRATER, LON_CRATER, lats, lons])
     
-    dirs = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
-    ix = int(round(brng / (360. / len(dirs))))
-    return dirs[ix % len(dirs)]
+    # Haversine
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = np.sin(dlat/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2)**2
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
+    distancias = np.round(R * c, 2)
+    
+    # Azimut / Dirección
+    x = np.sin(dlon) * np.cos(lat2)
+    y = np.cos(lat1) * np.sin(lat2) - (np.sin(lat1) * np.cos(lat2) * np.cos(dlon))
+    initial_bearing = np.arctan2(x, y)
+    brng = (np.degrees(initial_bearing) + 360) % 360
+    
+    dirs = np.array(['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'])
+    ix = np.round(brng / (360. / len(dirs))).astype(int)
+    direcciones = dirs[ix % len(dirs)]
+    
+    return distancias, direcciones
 
-def calcular_distancia_haversine(lat2, lon2):
-    # Calcula la distancia en kilómetros entre el cráter y la muestra
-    R = 6371.0 # Radio de la Tierra en km
-    lat1_rad, lon1_rad, lat2_rad, lon2_rad = map(math.radians, [LAT_CRATER, LON_CRATER, lat2, lon2])
-    dlat = lat2_rad - lat1_rad
-    dlon = lon2_rad - lon1_rad
-    a = math.sin(dlat/2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon/2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-    return round(R * c, 2)
-
-def clasificar_riesgo(espesor):
-    if pd.isna(espesor) or espesor == 0: return '⚪ N/A'
-    elif espesor < 1: return '🟢 Bajo (< 1mm)'
-    elif espesor <= 5: return '🟠 Medio (1-5mm)'
-    else: return '🔴 Alto (> 5mm)'
+def clasificar_riesgo_vectorizado(espesores):
+    """Clasificación de riesgo usando numpy select para mayor velocidad"""
+    condiciones = [
+        pd.isna(espesores) | (espesores == 0),
+        espesores < 1,
+        espesores <= 5,
+        espesores > 5
+    ]
+    opciones = ['⚪ N/A', '🟢 Bajo (< 1mm)', '🟠 Medio (1-5mm)', '🔴 Alto (> 5mm)']
+    return np.select(condiciones, opciones, default='⚪ N/A')
 
 def obtener_url_imagen(url_original):
     url_limpia = str(url_original).strip()
@@ -102,12 +107,11 @@ def obtener_nombre_foto(url_original):
     return "Archivo Google Drive" if ("drive.google.com" in url_limpia or not nombre_sin_ext) else nombre_sin_ext
 
 # ==========================================
-# 3. MOTOR DE DATOS CACHEADO
+# 3. MOTOR DE DATOS CACHEADO (OPTIMIZADO)
 # ==========================================
 @st.cache_data(show_spinner="Descargando y optimizando base de datos...")
 def cargar_y_limpiar_datos(archivo, url_gs):
     df_temp = None
-    
     if archivo is not None:
         df_temp = pd.read_csv(archivo) if archivo.name.endswith('.csv') else pd.read_excel(archivo)
     elif url_gs:
@@ -139,11 +143,12 @@ def cargar_y_limpiar_datos(archivo, url_gs):
         df_temp['Fecha_Recoleccion'] = pd.to_datetime(df_temp['Fecha_Recoleccion'], errors='coerce')
 
     if 'Latitud' in df_temp.columns and 'Longitud' in df_temp.columns:
-        df_temp['Direccion_Viento'] = df_temp.apply(lambda x: calcular_azimut_y_direccion(x['Latitud'], x['Longitud']), axis=1)
-        df_temp['Distancia_Crater_km'] = df_temp.apply(lambda x: calcular_distancia_haversine(x['Latitud'], x['Longitud']), axis=1)
+        distancias, direcciones = operaciones_geoespaciales_vectorizadas(df_temp['Latitud'].values, df_temp['Longitud'].values)
+        df_temp['Distancia_Crater_km'] = distancias
+        df_temp['Direccion_Viento'] = direcciones
         
     if 'Espesor_Deposito_mm' in df_temp.columns:
-        df_temp['Nivel_Riesgo'] = df_temp['Espesor_Deposito_mm'].apply(clasificar_riesgo)
+        df_temp['Nivel_Riesgo'] = clasificar_riesgo_vectorizado(df_temp['Espesor_Deposito_mm'])
 
     cols_info = ['ID_Muestra', 'Vereda', 'Latitud', 'Longitud', 'Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'URLs_Fotos', 'URL_Microscopio', 'Fecha_Recoleccion', 'Enlace_Reporte', 'Direccion_Viento', 'Distancia_Crater_km', 'Nivel_Riesgo']
     cols_conteo = [col for col in df_temp.columns if col not in cols_info]
@@ -153,19 +158,43 @@ def cargar_y_limpiar_datos(archivo, url_gs):
 
     df_temp['Total_Granos'] = df_temp[cols_conteo].sum(axis=1)
     
+    # Vectorización del cálculo de porcentajes
     df_pct_temp = df_temp.copy()
-    for col in cols_conteo:
-        df_pct_temp[col] = (df_temp[col] / df_temp['Total_Granos'].replace(0, 1)) * 100 
+    if not df_temp[cols_conteo].empty:
+        df_pct_temp[cols_conteo] = df_temp[cols_conteo].div(df_temp['Total_Granos'].replace(0, 1), axis=0) * 100
 
     return df_temp, df_pct_temp, cols_conteo
 
 # ==========================================
-# 4. MÓDULOS MACRO-PESTAÑAS
+# 4. MICRO-CACHÉ MATEMÁTICO (NUEVO)
+# ==========================================
+@st.cache_data(show_spinner="Calculando modelo de interpolación espacial...")
+def calcular_modelo_espacial(lon, lat, z, metodo_interp, resolucion):
+    """Realiza la matemática pesada solo si cambian los datos o la resolución"""
+    margen_lon, margen_lat = (lon.max() - lon.min()) * 0.2 if lon.max() != lon.min() else 0.05, (lat.max() - lat.min()) * 0.2 if lat.max() != lat.min() else 0.05
+    lim_lon_min, lim_lon_max = lon.min() - margen_lon, lon.max() + margen_lon
+    lim_lat_min, lim_lat_max = lat.min() - margen_lat, lat.max() + margen_lat
+    
+    grid_lon, grid_lat = np.mgrid[lim_lon_min:lim_lon_max:complex(0, resolucion), lim_lat_min:lim_lat_max:complex(0, resolucion)]
+    
+    if "RBF" in metodo_interp:
+        rbf_func = Rbf(lon, lat, z, function='multiquadric', smooth=0.1)
+        grid_z = rbf_func(grid_lon, grid_lat)
+    elif "Cúbica" in metodo_interp:
+        try: grid_z = griddata((lon, lat), z, (grid_lon, grid_lat), method='cubic')
+        except: grid_z = griddata((lon, lat), z, (grid_lon, grid_lat), method='linear')
+    else:
+        grid_z = griddata((lon, lat), z, (grid_lon, grid_lat), method='linear')
+    
+    grid_z = np.clip(grid_z, 0, z.max() * 1.2)
+    return grid_lon, grid_lat, grid_z, lim_lon_min, lim_lon_max, lim_lat_min, lim_lat_max
+
+# ==========================================
+# 5. MÓDULOS MACRO-PESTAÑAS
 # ==========================================
 
 def renderizar_kpis(df_fil, cols_conteo):
     try:
-        # --- RESUMEN INTELIGENTE (TEXTO AUTOMATIZADO) ---
         m_count = len(df_fil)
         max_esp = df_fil['Espesor_Deposito_mm'].max() if 'Espesor_Deposito_mm' in df_fil.columns else 0
         min_dom = df_fil[cols_conteo].sum().idxmax() if not df_fil[cols_conteo].empty else "N/A"
@@ -184,18 +213,13 @@ def renderizar_kpis(df_fil, cols_conteo):
         k2.metric("Espesor Máximo (mm)", max_esp)
         k3.metric("Mineral Dominante", min_dom)
         k4.metric("Dispersión Predominante", dir_dom)
-        
         st.markdown("---")
     except Exception as e: st.error(f"⚠️ Error al renderizar KPIs: {e}")
 
 def renderizar_modulo_espacial(df_fil, archivo_geo):
     try:
         st.subheader("Cartografía y Modelamiento Matemático")
-        tipo_mapa = st.radio(
-            "Seleccione la vista espacial:", 
-            ["📍 Puntos (2D)", "🔥 Calor (2D)", "🌋 Vista 3D (Volumen)", "🎯 Isopacas (Espesor)", "🪨 Isopletas (Tamaño de Grano)"], 
-            horizontal=True
-        )
+        tipo_mapa = st.radio("Seleccione la vista espacial:", ["📍 Puntos (2D)", "🔥 Calor (2D)", "🌋 Vista 3D (Volumen)", "🎯 Isopacas (Espesor)", "🪨 Isopletas (Tamaño de Grano)"], horizontal=True)
         
         metodo_interp = 'RBF (Recomendado)'
         resolucion = 200
@@ -205,7 +229,6 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                 resolucion = st.slider("Resolución de Malla (Grid)", min_value=100, max_value=500, value=250, step=50, help="Mayor resolución mejora la curva pero tarda más en procesar.")
         
         st.markdown("---")
-        
         df_mapa = df_fil.dropna(subset=['Latitud', 'Longitud']).copy()
         if df_mapa.empty: return st.warning("No hay datos con coordenadas válidas.")
         
@@ -224,7 +247,6 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
             m = folium.Map(location=[c_lat, c_lon], zoom_start=11, tiles='CartoDB positron')
             folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', attr='Esri', overlay=False).add_to(m)
             folium.TileLayer('https://services.arcgis.com/WMSServer', attr='SGC', name='Amenaza (SGC)', overlay=True, opacity=0.7).add_to(m)
-            
             folium.Marker([LAT_CRATER, LON_CRATER], tooltip="🌋 Cráter Volcán Puracé", icon=folium.Icon(color="red", icon="fire")).add_to(m)
 
             if archivo_geo: folium.GeoJson(json.load(archivo_geo), style_function=lambda f: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5, 'fillOpacity': 0.15}).add_to(m)
@@ -248,23 +270,11 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                     st.warning(f"⚠️ Se requieren al menos 4 puntos para generar el modelo de {col_obj}.")
                 else:
                     lon, lat, z = df_mod['Longitud'].values, df_mod['Latitud'].values, df_mod[col_obj].values
-                    margen_lon, margen_lat = (lon.max() - lon.min()) * 0.2 if lon.max() != lon.min() else 0.05, (lat.max() - lat.min()) * 0.2 if lat.max() != lat.min() else 0.05
-                    lim_lon_min, lim_lon_max = lon.min() - margen_lon, lon.max() + margen_lon
-                    lim_lat_min, lim_lat_max = lat.min() - margen_lat, lat.max() + margen_lat
                     
-                    grid_lon, grid_lat = np.mgrid[lim_lon_min:lim_lon_max:complex(0, resolucion), lim_lat_min:lim_lat_max:complex(0, resolucion)]
+                    # Llamada a la función cacheada
+                    grid_lon, grid_lat, grid_z, lim_lon_min, lim_lon_max, lim_lat_min, lim_lat_max = calcular_modelo_espacial(lon, lat, z, metodo_interp, resolucion)
                     
-                    if "RBF" in metodo_interp:
-                        rbf_func = Rbf(lon, lat, z, function='multiquadric', smooth=0.1)
-                        grid_z = rbf_func(grid_lon, grid_lat)
-                    elif "Cúbica" in metodo_interp:
-                        try: grid_z = griddata((lon, lat), z, (grid_lon, grid_lat), method='cubic')
-                        except: grid_z = griddata((lon, lat), z, (grid_lon, grid_lat), method='linear')
-                    else:
-                        grid_z = griddata((lon, lat), z, (grid_lon, grid_lat), method='linear')
-                    
-                    grid_z = np.clip(grid_z, 0, z.max() * 1.2) 
-                    
+                    # Generación de Imagen Transparente
                     fig = plt.figure(frameon=False)
                     ax = fig.add_axes([0, 0, 1, 1])
                     ax.axis('off')
@@ -277,7 +287,10 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                     plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0, transparent=True)
                     buf.seek(0)
                     img_url = f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
+                    
+                    # Limpieza activa de memoria (Garbage Collection)
                     plt.close(fig)
+                    buf.close()
 
                     folium.raster_layers.ImageOverlay(image=img_url, bounds=[[lim_lat_min, lim_lon_min], [lim_lat_max, lim_lon_max]], opacity=0.8).add_to(m)
                     for _, r in df_mod.iterrows(): folium.CircleMarker([r['Latitud'], r['Longitud']], radius=3, color="black", fill=True, popup=f"{r[col_obj]}").add_to(m)
