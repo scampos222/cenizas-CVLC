@@ -176,8 +176,8 @@ else:
                     'color': '#2C3E50',
                     'weight': 1.5,
                     'fillOpacity': 0.15
-                },
-                tooltip=folium.GeoJsonTooltip(fields=['NOMBRE'], aliases=['Vereda:']) # Cambia 'NOMBRE' si tu GeoJSON usa otro campo
+                }
+                # tooltip=folium.GeoJsonTooltip(fields=['NOMBRE'], aliases=['Vereda:']) <- ESTO ERA LO QUE ROMPÍA LA APP
             ).add_to(m)
 
         if "Puntos" in tipo_mapa:
