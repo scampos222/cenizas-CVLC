@@ -11,3 +11,4 @@ streamlit-folium
 statsmodels
 pydeck
 scipy
+numpy
