@@ -147,3 +147,37 @@ else:
     with tab4 if 'tab4' in locals() else tab3:
         st.subheader("Base de Datos (Conteos Crudos)")
         st.dataframe(df_filtrado, use_container_width=True)
+        # --- PESTAÑA 3: COMPARATIVA LADO A LADO ---
+    with tab3:
+        st.subheader("⚖️ Comparativa de Mineralogía entre dos Muestras")
+        st.write("Selecciona dos muestras para contrastar su composición porcentual.")
+        
+        # Crear dos columnas idénticas
+        comp_col1, comp_col2 = st.columns(2)
+        
+        with comp_col1:
+            muestra_1 = st.selectbox("Primera Muestra:", df_filtrado['ID_Muestra'], key="comp1")
+            datos_m1_pct = df_pct_filtrado[df_pct_filtrado['ID_Muestra'] == muestra_1][cols_conteo].iloc[0]
+            datos_grafica_1 = datos_m1_pct[datos_m1_pct > 0].reset_index()
+            datos_grafica_1.columns = ['Componente', 'Porcentaje']
+            
+            fig_pie_1 = px.pie(datos_grafica_1, names='Componente', values='Porcentaje', hole=0.4, title=f"Composición - {muestra_1}")
+            fig_pie_1.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig_pie_1, use_container_width=True)
+            
+        with comp_col2:
+            # Seleccionamos la segunda muestra por defecto si hay más de una
+            idx_default = 1 if len(df_filtrado) > 1 else 0
+            muestra_2 = st.selectbox("Segunda Muestra:", df_filtrado['ID_Muestra'], index=idx_default, key="comp2")
+            datos_m2_pct = df_pct_filtrado[df_pct_filtrado['ID_Muestra'] == muestra_2][cols_conteo].iloc[0]
+            datos_grafica_2 = datos_m2_pct[datos_m2_pct > 0].reset_index()
+            datos_grafica_2.columns = ['Componente', 'Porcentaje']
+            
+            fig_pie_2 = px.pie(datos_grafica_2, names='Componente', values='Porcentaje', hole=0.4, title=f"Composición - {muestra_2}")
+            fig_pie_2.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig_pie_2, use_container_width=True)
+
+    # --- PESTAÑA 4: DATOS CRUDOS ---
+    with tab4:
+        st.subheader("Base de Datos (Conteos Crudos)")
+        st.dataframe(df_filtrado, use_container_width=True)
