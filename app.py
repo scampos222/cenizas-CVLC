@@ -11,7 +11,7 @@ import pydeck as pdk
 import os
 from urllib.parse import unquote, urlparse
 import numpy as np
-from scipy.interpolate import griddata, Rbf
+from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
 import io
 import base64
@@ -68,6 +68,16 @@ def calcular_azimut_y_direccion(lat2, lon2):
     dirs = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
     ix = int(round(brng / (360. / len(dirs))))
     return dirs[ix % len(dirs)]
+
+def calcular_distancia_haversine(lat2, lon2):
+    # Calcula la distancia en kilómetros entre el cráter y la muestra
+    R = 6371.0 # Radio de la Tierra en km
+    lat1_rad, lon1_rad, lat2_rad, lon2_rad = map(math.radians, [LAT_CRATER, LON_CRATER, lat2, lon2])
+    dlat = lat2_rad - lat1_rad
+    dlon = lon2_rad - lon1_rad
+    a = math.sin(dlat/2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    return round(R * c, 2)
 
 def clasificar_riesgo(espesor):
     if pd.isna(espesor) or espesor == 0: return '⚪ N/A'
@@ -130,13 +140,15 @@ def cargar_y_limpiar_datos(archivo, url_gs):
 
     if 'Latitud' in df_temp.columns and 'Longitud' in df_temp.columns:
         df_temp['Direccion_Viento'] = df_temp.apply(lambda x: calcular_azimut_y_direccion(x['Latitud'], x['Longitud']), axis=1)
+        df_temp['Distancia_Crater_km'] = df_temp.apply(lambda x: calcular_distancia_haversine(x['Latitud'], x['Longitud']), axis=1)
+        
     if 'Espesor_Deposito_mm' in df_temp.columns:
         df_temp['Nivel_Riesgo'] = df_temp['Espesor_Deposito_mm'].apply(clasificar_riesgo)
 
-    cols_info = ['ID_Muestra', 'Vereda', 'Latitud', 'Longitud', 'Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'URLs_Fotos', 'URL_Microscopio', 'Fecha_Recoleccion', 'Enlace_Reporte', 'Direccion_Viento', 'Nivel_Riesgo']
+    cols_info = ['ID_Muestra', 'Vereda', 'Latitud', 'Longitud', 'Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'URLs_Fotos', 'URL_Microscopio', 'Fecha_Recoleccion', 'Enlace_Reporte', 'Direccion_Viento', 'Distancia_Crater_km', 'Nivel_Riesgo']
     cols_conteo = [col for col in df_temp.columns if col not in cols_info]
     
-    for col in cols_conteo + ['Tamaño_Promedio_mm', 'Espesor_Deposito_mm']:
+    for col in cols_conteo + ['Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'Distancia_Crater_km']:
         if col in df_temp.columns: df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce').fillna(0)
 
     df_temp['Total_Granos'] = df_temp[cols_conteo].sum(axis=1)
@@ -153,13 +165,26 @@ def cargar_y_limpiar_datos(archivo, url_gs):
 
 def renderizar_kpis(df_fil, cols_conteo):
     try:
-        st.subheader("📊 Resumen Ejecutivo y Riesgo")
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Muestras Analizadas", len(df_fil))
-        k2.metric("Espesor Máximo (mm)", df_fil['Espesor_Deposito_mm'].max() if 'Espesor_Deposito_mm' in df_fil.columns else "N/A")
-        k3.metric("Mineral Dominante", df_fil[cols_conteo].sum().idxmax() if not df_fil[cols_conteo].empty else "N/A")
+        # --- RESUMEN INTELIGENTE (TEXTO AUTOMATIZADO) ---
+        m_count = len(df_fil)
+        max_esp = df_fil['Espesor_Deposito_mm'].max() if 'Espesor_Deposito_mm' in df_fil.columns else 0
+        min_dom = df_fil[cols_conteo].sum().idxmax() if not df_fil[cols_conteo].empty else "N/A"
         dir_dom = df_fil['Direccion_Viento'].mode()[0] if 'Direccion_Viento' in df_fil.columns and not df_fil['Direccion_Viento'].empty else "N/A"
+        
+        if not df_fil[cols_conteo].empty and df_fil[cols_conteo].sum().sum() > 0:
+            pct_dom = round((df_fil[cols_conteo].sum().max() / df_fil[cols_conteo].sum().sum()) * 100, 1)
+        else:
+            pct_dom = 0
+            
+        st.info(f"**📝 Resumen Analítico Automatizado:** Bajo los parámetros actuales, se analizaron **{m_count} muestras** con un espesor máximo de **{max_esp} mm**. La dispersión predominante indica un transporte de ceniza hacia el **{dir_dom}**. Mineralógicamente, el depósito está dominado por **{min_dom}** (aprox. {pct_dom}% del conteo total analizado).")
+
+        st.subheader("📊 Panel de Indicadores (KPIs)")
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Muestras Analizadas", m_count)
+        k2.metric("Espesor Máximo (mm)", max_esp)
+        k3.metric("Mineral Dominante", min_dom)
         k4.metric("Dispersión Predominante", dir_dom)
+        
         st.markdown("---")
     except Exception as e: st.error(f"⚠️ Error al renderizar KPIs: {e}")
 
@@ -172,7 +197,6 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
             horizontal=True
         )
         
-        # --- PARÁMETROS GEOSTADÍSTICOS AVANZADOS ---
         metodo_interp = 'RBF (Recomendado)'
         resolucion = 200
         if "Isopacas" in tipo_mapa or "Isopletas" in tipo_mapa:
@@ -208,7 +232,7 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
             if "Puntos" in tipo_mapa:
                 mc = MarkerCluster().add_to(m)
                 for _, r in df_mapa.iterrows():
-                    html = f"<b>{r.get('ID_Muestra', 'N/A')}</b><br>Vereda: {r.get('Vereda', 'N/A')}<br>Espesor: {r.get('Espesor_Deposito_mm', 0)} mm<br>Nivel Riesgo: {r.get('Nivel_Riesgo', 'N/A')}"
+                    html = f"<b>{r.get('ID_Muestra', 'N/A')}</b><br>Vereda: {r.get('Vereda', 'N/A')}<br>Espesor: {r.get('Espesor_Deposito_mm', 0)} mm<br>Distancia Cráter: {r.get('Distancia_Crater_km', 0)} km"
                     folium.Marker([r['Latitud'], r['Longitud']], popup=folium.Popup(html, max_width=250), tooltip=str(r.get('ID_Muestra', '')), icon=folium.Icon(color="darkblue", icon="info-sign")).add_to(mc)
             
             elif "Calor" in tipo_mapa:
@@ -221,7 +245,7 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                 df_mod = df_mod.groupby(['Latitud', 'Longitud'], as_index=False).agg({col_obj: 'max', 'ID_Muestra': 'first'})
                 
                 if len(df_mod) < 4:
-                    st.warning(f"⚠️ Se requieren al menos 4 puntos (coordenadas distintas) para generar el modelo de {col_obj}.")
+                    st.warning(f"⚠️ Se requieren al menos 4 puntos para generar el modelo de {col_obj}.")
                 else:
                     lon, lat, z = df_mod['Longitud'].values, df_mod['Latitud'].values, df_mod[col_obj].values
                     margen_lon, margen_lat = (lon.max() - lon.min()) * 0.2 if lon.max() != lon.min() else 0.05, (lat.max() - lat.min()) * 0.2 if lat.max() != lat.min() else 0.05
@@ -230,9 +254,7 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                     
                     grid_lon, grid_lat = np.mgrid[lim_lon_min:lim_lon_max:complex(0, resolucion), lim_lat_min:lim_lat_max:complex(0, resolucion)]
                     
-                    # --- NÚCLEO MATEMÁTICO ROBUSTO ---
                     if "RBF" in metodo_interp:
-                        # RBF es ideal para cenizas, 'multiquadric' con smooth previene sobreajuste
                         rbf_func = Rbf(lon, lat, z, function='multiquadric', smooth=0.1)
                         grid_z = rbf_func(grid_lon, grid_lat)
                     elif "Cúbica" in metodo_interp:
@@ -241,7 +263,6 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                     else:
                         grid_z = griddata((lon, lat), z, (grid_lon, grid_lat), method='linear')
                     
-                    # CLIPPING: Prevenir espesores negativos o infinitos
                     grid_z = np.clip(grid_z, 0, z.max() * 1.2) 
                     
                     fig = plt.figure(frameon=False)
@@ -261,7 +282,6 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                     folium.raster_layers.ImageOverlay(image=img_url, bounds=[[lim_lat_min, lim_lon_min], [lim_lat_max, lim_lon_max]], opacity=0.8).add_to(m)
                     for _, r in df_mod.iterrows(): folium.CircleMarker([r['Latitud'], r['Longitud']], radius=3, color="black", fill=True, popup=f"{r[col_obj]}").add_to(m)
 
-                    # Leyenda Dinámica
                     min_val, max_val = float(grid_z.min()), float(grid_z.max())
                     if "Isopacas" in tipo_mapa:
                         colormap = cm.LinearColormap(colors=['#FEE0D2', '#FC9272', '#DE2D26', '#99000D'], vmin=min_val, vmax=max_val)
@@ -397,7 +417,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, fotos_subidas
 
         st.markdown("---")
         
-        # --- 3. EVOLUCIÓN TEMPORAL Y TAMAÑO ---
+        # --- 3. EVOLUCIÓN TEMPORAL ---
         st.subheader("3. Evolución Temporal (Cenizas y Tamaño)")
         col_t1, col_t2 = st.columns(2)
         with col_t1:
@@ -415,13 +435,41 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, fotos_subidas
                     fig_l = px.line(d_t, x="Fecha_Recoleccion", y="Tamaño_Promedio_mm", color="Vereda", markers=True, hover_name="ID_Muestra", color_discrete_sequence=colores_profesionales, title="Seguimiento de Tamaño de Grano")
                     fig_l.update_traces(line=dict(width=3), marker=dict(size=8)); st.plotly_chart(fig_l, use_container_width=True)
 
+        st.markdown("---")
+        
+        # --- 4. NUEVO: RELACIONES ESPACIALES Y ESTADÍSTICAS ---
+        st.subheader("4. Análisis de Decaimiento y Correlación Estadística")
+        c_dec, c_cor = st.columns(2)
+        
+        with c_dec:
+            if 'Distancia_Crater_km' in df_fil.columns and 'Espesor_Deposito_mm' in df_fil.columns:
+                fig_decay = px.scatter(df_fil, x="Distancia_Crater_km", y="Espesor_Deposito_mm", 
+                                       color="Vereda", size="Tamaño_Promedio_mm", hover_name="ID_Muestra",
+                                       title="Decaimiento del Espesor vs. Distancia al Cráter",
+                                       labels={"Distancia_Crater_km": "Distancia al Cráter (km)", "Espesor_Deposito_mm": "Espesor (mm)"},
+                                       color_discrete_sequence=colores_profesionales)
+                st.plotly_chart(fig_decay, use_container_width=True)
+            else:
+                st.info("Faltan datos para calcular el decaimiento espacial.")
+
+        with c_cor:
+            cols_to_corr = cols_conteo + ['Espesor_Deposito_mm', 'Tamaño_Promedio_mm', 'Distancia_Crater_km']
+            cols_to_corr = [c for c in cols_to_corr if c in df_fil.columns]
+            
+            if len(cols_to_corr) > 1:
+                df_corr = df_fil[cols_to_corr].corr(method='pearson')
+                fig_corr = px.imshow(df_corr, text_auto=".2f", aspect="auto", color_continuous_scale="RdBu_r", title="Matriz de Correlación (Pearson)", origin="lower")
+                st.plotly_chart(fig_corr, use_container_width=True)
+            else:
+                st.info("No hay suficientes variables numéricas para la matriz de correlación.")
+
     except Exception as e: st.error(f"⚠️ Error renderizando el módulo de laboratorio: {e}")
 
 def renderizar_modulo_operativo(df_fil):
     try:
         st.subheader("Semáforo de Gestión del Riesgo y Operaciones")
         
-        cols_mostrar = ['ID_Muestra', 'Vereda', 'Fecha_Recoleccion', 'Espesor_Deposito_mm', 'Nivel_Riesgo', 'Enlace_Reporte']
+        cols_mostrar = ['ID_Muestra', 'Vereda', 'Distancia_Crater_km', 'Espesor_Deposito_mm', 'Nivel_Riesgo', 'Enlace_Reporte']
         cols_existentes = [c for c in cols_mostrar if c in df_fil.columns]
         df_mostrar = df_fil[cols_existentes].copy()
         
