@@ -317,12 +317,12 @@ else:
         col_m_prev, col_m_select, col_m_next = st.columns([1, 3, 1])
         
         with col_m_prev:
-            if st.button("⬅️ Muestra Anterior", use_container_width=True):
+            if st.button("⬅️", use_container_width=True):
                 st.session_state["idx_muestra_actual"] = (st.session_state["idx_muestra_actual"] - 1) % len(lista_muestras)
                 st.rerun()
 
         with col_m_next:
-            if st.button("Muestra Siguiente ➡️", use_container_width=True):
+            if st.button("➡️", use_container_width=True):
                 st.session_state["idx_muestra_actual"] = (st.session_state["idx_muestra_actual"] + 1) % len(lista_muestras)
                 st.rerun()
 
