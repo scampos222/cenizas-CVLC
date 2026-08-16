@@ -17,7 +17,10 @@ st.set_page_config(page_title="AshViewer-CVLC", layout="wide")
 
 st.markdown("""
     <style>
+    /* Corrección de colores para que sean legibles en Modo Claro y Oscuro */
     .main {background-color: transparent;}
+    
+    /* Estilo para las tarjetas de KPIs */
     div[data-testid="metric-container"] {
         background-color: #FFFFFF !important;
         border: 1px solid #EAEAEA !important;
@@ -25,6 +28,7 @@ st.markdown("""
         border-radius: 10px !important;
         box-shadow: 2px 2px 5px rgba(0,0,0,0.05) !important;
     }
+    /* Forzar que el texto de los KPIs siempre sea oscuro */
     div[data-testid="metric-container"] * {
         color: #2C3E50 !important;
     }
@@ -54,7 +58,7 @@ st.sidebar.title("Panel de Control")
 
 # Botón de Actualización Inteligente (Limpia la memoria Caché)
 if st.sidebar.button("🔄 Actualizar / Recargar Plataforma", use_container_width=True):
-    st.cache_data.clear() # Esto borra la memoria y fuerza a descargar datos frescos
+    st.cache_data.clear() 
     st.rerun()
 st.sidebar.markdown("---")
 
@@ -86,7 +90,7 @@ def cargar_y_limpiar_datos(archivo, url_gs):
                 csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
                 df_temp = pd.read_csv(csv_url)
         except Exception:
-            pass # Si falla, pasará al entorno de prueba
+            pass 
             
     # 3. Datos de prueba por defecto
     if df_temp is None:
@@ -116,7 +120,6 @@ def cargar_y_limpiar_datos(archivo, url_gs):
         'Fotos': 'URLs_Fotos', 'Fotos_Url': 'URLs_Fotos',
         'Reporte': 'Enlace_Reporte'
     }
-    # Renombrar columnas automáticamente si vienen con otros nombres
     df_temp = df_temp.rename(columns=lambda x: sinonimos_columnas.get(str(x).strip(), x))
     
     if 'Fecha_Recoleccion' in df_temp.columns:
@@ -124,10 +127,8 @@ def cargar_y_limpiar_datos(archivo, url_gs):
         
     return df_temp
 
-# Llamamos a la función inteligente
 df = cargar_y_limpiar_datos(archivo_subido, url_google_sheets)
 
-# Identificar columnas numéricas (Minerales)
 cols_info = ['ID_Muestra', 'Vereda', 'Latitud', 'Longitud', 'Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'URLs_Fotos', 'URL_Microscopio', 'Fecha_Recoleccion', 'Enlace_Reporte']
 cols_conteo = [col for col in df.columns if col not in cols_info and pd.api.types.is_numeric_dtype(df[col])]
 
@@ -508,6 +509,33 @@ else:
                 margin=dict(t=40, b=40, l=40, r=40)
             )
             st.plotly_chart(fig_ternary, use_container_width=True)
+
+        # --- NUEVO PASO 2: GRÁFICA DE ÁREA APILADA TEMPORAL ---
+        st.markdown("---")
+        st.subheader("📊 Evolución Mineralógica Temporal")
+        st.write("Muestra cómo cambia la proporción de los componentes de la ceniza con el paso de los días (promedio diario).")
+        
+        if 'Fecha_Recoleccion' in df_filtrado.columns and not df_filtrado['Fecha_Recoleccion'].dropna().empty:
+            df_temp_area = df_filtrado.dropna(subset=['Fecha_Recoleccion']).copy()
+            df_pct_area = df_pct_filtrado.loc[df_temp_area.index].copy()
+            df_pct_area['Fecha_Recoleccion'] = df_temp_area['Fecha_Recoleccion']
+            
+            # Agrupar por fecha calculando el promedio de cada componente
+            df_area_grouped = df_pct_area.groupby('Fecha_Recoleccion')[cols_conteo].mean().reset_index()
+            
+            # Transformar formato para plotly
+            df_area_melted = df_area_grouped.melt(id_vars='Fecha_Recoleccion', value_vars=cols_conteo, var_name='Componente', value_name='Porcentaje')
+            
+            fig_area = px.area(
+                df_area_melted, x="Fecha_Recoleccion", y="Porcentaje", color="Componente",
+                color_discrete_map=color_map_oficial,
+                labels={"Fecha_Recoleccion": "Fecha", "Porcentaje": "Proporción (%)"}
+            )
+            # Asegurar que el eje Y siempre cubra de 0 a 100%
+            fig_area.update_layout(yaxis=dict(range=[0, 100]), margin=dict(t=20, b=20, l=10, r=10))
+            st.plotly_chart(fig_area, use_container_width=True)
+        else:
+            st.info("Se requiere información temporal válida en la columna 'Fecha_Recoleccion' para esta visualización.")
 
     # --- PESTAÑA 4: SEGUIMIENTO DE TAMAÑO ---
     with tab_tamano:
