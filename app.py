@@ -195,7 +195,7 @@ else:
             fig_pie.update_layout(margin=dict(t=20, b=20, l=20, r=20))
             st.plotly_chart(fig_pie, use_container_width=True)
             
-       with col_foto:
+         with col_foto:
             datos_m_crudos = df_filtrado[df_filtrado['ID_Muestra'] == muestra_sel].iloc[0]
             
             # --- GALERÍA CARRUSEL ---
