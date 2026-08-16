@@ -82,7 +82,7 @@ else:
         c3.metric("Tamaño Promedio", f"{df_filtrado['Tamaño_Promedio_mm'].mean():.2f} mm")
     st.markdown("---")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Mapa Interactivo", "📊 Composición de Muestra", "⚖️ Comparativa", "💾 Base de Datos"])
+   tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Mapa Interactivo", "📊 Composición de Muestra", "📈 Análisis Avanzado", "💾 Base de Datos"])
 
     # --- PESTAÑA 1: MAPA ---
     with tab1:
@@ -121,7 +121,7 @@ else:
         
         col_graf, col_foto = st.columns([2, 1])
         with col_graf:
-            fig_pie = px.pie(
+            fig_pie.update_traces(textposition='inside', textinfo='percent')
                 datos_grafica, names='Componente', values='Porcentaje',
                 hole=0.4, title=f"Composición Porcentual - {muestra_sel}"
             )
