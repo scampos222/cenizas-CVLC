@@ -174,7 +174,7 @@ else:
                 
         st_folium(m, width="100%", height=550)
 
-   # --- PESTAÑA 2: COMPOSICIÓN Y CARRUSEL DE FOTOS ---
+  # --- PESTAÑA 2: COMPOSICIÓN Y CARRUSEL DE FOTOS ---
     with tab_comp:
         st.subheader("Caracterización Mineralógica Individual")
         muestra_sel = st.selectbox(
@@ -187,20 +187,19 @@ else:
         datos_grafica = datos_muestra_pct[datos_muestra_pct > 0].reset_index()
         datos_grafica.columns = ["Componente", "Porcentaje"]
 
-        # AQUÍ INVERTIMOS LAS PROPORCIONES: [1.5 (Torta), 1 (Foto)]
-        col_graf, col_foto = st.columns([1.5, 1])
+        # PROPORCIÓN: 1.8 para la Torta (protagonista), 1 para la Foto
+        col_graf, col_foto = st.columns([1.8, 1])
         
         with col_graf:
             fig_pie = px.pie(
                 datos_grafica,
                 names="Componente",
                 values="Porcentaje",
-                hole=0.3,
+                hole=0.35,
                 color_discrete_sequence=colores_profesionales,
             )
             fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-            # Aumentamos los márgenes para que la torta respire
-            fig_pie.update_layout(margin=dict(t=30, b=30, l=30, r=30))
+            fig_pie.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=450)
             st.plotly_chart(fig_pie, use_container_width=True)
 
         with col_foto:
@@ -208,9 +207,7 @@ else:
                 df_filtrado["ID_Muestra"] == muestra_sel
             ].iloc[0]
 
-            if "URLs_Fotos" in datos_m_crudos and pd.notna(
-                datos_m_crudos["URLs_Fotos"]
-            ):
+            if "URLs_Fotos" in datos_m_crudos and pd.notna(datos_m_crudos["URLs_Fotos"]):
                 urls_crudas = str(datos_m_crudos["URLs_Fotos"]).split(",")
                 urls_limpias = [
                     u.strip()
@@ -250,12 +247,7 @@ else:
                     url_actual = urls_limpias[st.session_state[clave_estado]]
                     url_final = obtener_url_imagen(url_actual)
 
-                    # Sistema anticaídas: Intenta cargar con st.image, si falla, usa HTML crudo
-                    try:
-                        st.image(url_final, use_container_width=True)
-                    except Exception:
-                        st.markdown(f'<img src="{url_final}" style="width:100%;">', unsafe_allow_html=True)
-                        
+                    st.image(url_final, caption=f"Muestra {muestra_sel}", use_container_width=True)
                 else:
                     st.info("No se encontraron enlaces válidos.")
             else:
