@@ -18,3 +18,4 @@ branca
 scikit-learn
 requests
 SQLAlchemy
+openpyxl
