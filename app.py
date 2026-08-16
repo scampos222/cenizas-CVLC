@@ -185,7 +185,7 @@ else:
         "Mapa de Distribución", "Análisis de Muestra", "Análisis Avanzado", "Seguimiento de Tamaño", "Verificación de Campo", "Base de Datos"
     ])
 
-    # --- PESTAÑA 1: MAPAS ESPACIALES (AHORA CON 3D) ---
+   # --- PESTAÑA 1: MAPAS ESPACIALES (AHORA CON 3D Y RELIEVE) ---
     with tab_mapa:
         st.subheader("Distribución Espacial de Muestras y Depósitos")
         tipo_mapa = st.radio(
@@ -203,7 +203,7 @@ else:
             df_3d = df_filtrado.dropna(subset=['Latitud', 'Longitud', 'Espesor_Deposito_mm']).copy()
             
             if not df_3d.empty:
-                # Multiplicamos la elevación para que el pilar se vea claramente en el mapa
+                # Multiplicamos la elevación para que el pilar se vea claramente
                 df_3d['Elevacion_Visual'] = df_3d['Espesor_Deposito_mm'] * 150 
                 
                 capa_columnas = pdk.Layer(
@@ -222,15 +222,15 @@ else:
                     longitude=centro_lon,
                     latitude=centro_lat,
                     zoom=10.5,
-                    pitch=55, # Inclinación para el efecto 3D
-                    bearing=20 # Rotación
+                    pitch=55, # Inclinación 3D
+                    bearing=20
                 )
                 
                 mapa_3d = pdk.Deck(
                     layers=[capa_columnas],
                     initial_view_state=vista_inicial,
                     tooltip={"html": "<b>Muestra:</b> {ID_Muestra} <br/> <b>Vereda:</b> {Vereda} <br/> <b>Espesor real:</b> {Espesor_Deposito_mm} mm", "style": {"color": "white"}},
-                    map_style='mapbox://styles/mapbox/dark-v10' # Tema oscuro para resaltar la ceniza
+                    map_style='dark' # CORRECCIÓN: Estilo gratuito que no requiere API Key
                 )
                 
                 st.pydeck_chart(mapa_3d, use_container_width=True)
@@ -238,30 +238,97 @@ else:
                 st.warning("No hay datos de 'Espesor_Deposito_mm' para construir el volumen 3D.")
         
         else:
-            # Creamos el mapa base (puede ser claro u oscuro)
+            # --- MAPAS 2D (PUNTOS Y CALOR) ---
             m = folium.Map(location=[centro_lat, centro_lon], zoom_start=11, tiles='CartoDB positron')
             
-            # --- CAPA 1: SATÉLITE DE ALTA RESOLUCIÓN (ESRI) ---
+            # NUEVO: CAPA DE RELIEVE TOPOGRÁFICO DE ESRI
             folium.TileLayer(
-                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
                 attr='Esri',
-                name='Vista Satelital (Esri)',
+                name='Relieve Topográfico (Esri)',
                 overlay=False,
                 control=True
             ).add_to(m)
 
-            # --- CAPA 2: MAPA DE AMENAZA SGC (WMS - PLANTILLA) ---
-            # Nota: Reemplaza 'URL_DEL_WMS' y 'NOMBRE_CAPA' cuando tengas los datos del SGC
-            """
-            folium.raster_layers.WmsTileLayer(
-                url='URL_DEL_WMS',
-                layers='NOMBRE_CAPA',
-                name='Amenaza Volcánica SGC',
-                fmt='image/png',
-                transparent=True,
+            # Control para encender o apagar el relieve en la esquina del mapa
+            folium.LayerControl().add_to(m)
+            
+            if archivo_geojson is not None:
+                geo_data = json.load(archivo_geojson)
+                folium.GeoJson(
+                    geo_data, name="Veredas",
+                    style_function=lambda feature: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5, 'fillOpacity': 0.15}
+                ).add_to(m)
+
+            if "Puntos" in tipo_mapa:
+                marker_cluster = MarkerCluster().add_to(m)
+                for idx, row in df_filtrado.iterrows():
+                    html_popup = f"<div style='width:200px; font-family:sans-serif;'><b>ID: {row.get('ID_Muestra', 'N/A')}</b><br><b>Vereda:</b> {row.get('Vereda', 'N/A')}<br><b>Espesor:</b> {row.get('Espesor_Deposito_mm', 'N/A')} mm</div>"
+                    folium.Marker(location=[row['Latitud'], row['Longitud']], popup=folium.Popup(html_popup, max_width=300), tooltip=str(row.get('ID_Muestra', 'Muestra')), icon=folium.Icon(color="darkblue", icon="info-sign")).add_to(marker_cluster)
+            elif "Calor" in tipo_mapa:
+                if 'Espesor_Deposito_mm' in df_filtrado.columns:
+                    heat_data = df_filtrado.dropna(subset=['Latitud', 'Longitud', 'Espesor_Deposito_mm'])
+                    heat_points = [[row['Latitud'], row['Longitud'], float(row['Espesor_Deposito_mm']) * 2] for index, row in heat_data.iterrows()]
+                    HeatMap(heat_points, radius=25, blur=15, gradient={0.2: 'blue', 0.5: 'yellow', 1.0: 'red'}).add_to(m)
+                else:
+                    st.warning("Falta la columna 'Espesor_Deposito_mm' en tu base de datos.")
+                    
+            st_folium(m, width="100%", height=550)
+            
+        else:
+            # Creamos el mapa base 
+            m = folium.Map(location=[centro_lat, centro_lon], zoom_start=11, tiles='CartoDB positron')
+            
+            # --- CAPA 1: RELIEVE TOPOGRÁFICO DE ESRI ---
+            folium.TileLayer(
+                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+                attr='Esri',
+                name='Relieve Topográfico (Esri)',
+                overlay=False,
                 control=True
             ).add_to(m)
-            """
+
+            # --- CAPA 2: MAPA DE AMENAZA (SGC / ArcGIS) ---
+            # 1. Pega tu enlace dentro de las comillas simples abajo
+            url_servicio_arcgis = 'PEGA_AQUI_TU_ENLACE' 
+            
+            # 2. Si el enlace termina en MapServer, podemos llamarlo por WMS añadiendo /WMSServer
+            if url_servicio_arcgis != 'PEGA_AQUI_TU_ENLACE':
+                folium.raster_layers.WmsTileLayer(
+                    url=f"{url_servicio_arcgis}/WMSServer",
+                    layers='0', # 0 suele ser el ID de la capa principal
+                    name='Mapa de Amenaza Oficial',
+                    fmt='image/png',
+                    transparent=True,
+                    control=True
+                ).add_to(m)
+
+            # Control para encender o apagar las capas
+            folium.LayerControl().add_to(m)
+            
+            # --- AGREGAR GEOJSON DE VEREDAS ---
+            if archivo_geojson is not None:
+                geo_data = json.load(archivo_geojson)
+                folium.GeoJson(
+                    geo_data, name="Veredas",
+                    style_function=lambda feature: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5, 'fillOpacity': 0.15}
+                ).add_to(m)
+
+            # --- AGREGAR LOS PUNTOS O EL MAPA DE CALOR ---
+            if "Puntos" in tipo_mapa:
+                marker_cluster = MarkerCluster().add_to(m)
+                for idx, row in df_filtrado.iterrows():
+                    html_popup = f"<div style='width:200px; font-family:sans-serif;'><b>ID: {row.get('ID_Muestra', 'N/A')}</b><br><b>Vereda:</b> {row.get('Vereda', 'N/A')}<br><b>Espesor:</b> {row.get('Espesor_Deposito_mm', 'N/A')} mm</div>"
+                    folium.Marker(location=[row['Latitud'], row['Longitud']], popup=folium.Popup(html_popup, max_width=300), tooltip=str(row.get('ID_Muestra', 'Muestra')), icon=folium.Icon(color="darkblue", icon="info-sign")).add_to(marker_cluster)
+            elif "Calor" in tipo_mapa:
+                if 'Espesor_Deposito_mm' in df_filtrado.columns:
+                    heat_data = df_filtrado.dropna(subset=['Latitud', 'Longitud', 'Espesor_Deposito_mm'])
+                    heat_points = [[row['Latitud'], row['Longitud'], float(row['Espesor_Deposito_mm']) * 2] for index, row in heat_data.iterrows()]
+                    HeatMap(heat_points, radius=25, blur=15, gradient={0.2: 'blue', 0.5: 'yellow', 1.0: 'red'}).add_to(m)
+                else:
+                    st.warning("Falta la columna 'Espesor_Deposito_mm' en tu base de datos.")
+                    
+            st_folium(m, width="100%", height=550)
 
             # --- CONTROL DE CAPAS ---
             # Esto añade un botón en la esquina superior derecha para encender/apagar el satélite o el mapa SGC
