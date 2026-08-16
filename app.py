@@ -326,7 +326,7 @@ else:
 
         # --- NUEVO: DIAGRAMA TERNARIO ---
         st.subheader("🔺 Diagrama Ternario de Clasificación")
-        st.write("st.markdown("---")
+        st.markdown("---")
 
         # --- NUEVO: DIAGRAMA TERNARIO ESTANDARIZADO (V-L-C) ---
         st.subheader("🔺 Clasificación Petrológica de Cenizas (V-L-C)")
