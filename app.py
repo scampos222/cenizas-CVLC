@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import folium
 from folium.plugins import MarkerCluster, HeatMap
 from streamlit_folium import st_folium
@@ -9,6 +10,8 @@ import json
 import pydeck as pdk
 import os
 from urllib.parse import unquote, urlparse
+import numpy as np
+from scipy.interpolate import griddata
 
 # ==========================================
 # 1. CONFIGURACIÓN INSTITUCIONAL
@@ -17,10 +20,7 @@ st.set_page_config(page_title="AshViewer-CVLC", layout="wide")
 
 st.markdown("""
     <style>
-    /* Corrección de colores para que sean legibles en Modo Claro y Oscuro */
     .main {background-color: transparent;}
-    
-    /* Estilo para las tarjetas de KPIs */
     div[data-testid="metric-container"] {
         background-color: #FFFFFF !important;
         border: 1px solid #EAEAEA !important;
@@ -28,7 +28,6 @@ st.markdown("""
         border-radius: 10px !important;
         box-shadow: 2px 2px 5px rgba(0,0,0,0.05) !important;
     }
-    /* Forzar que el texto de los KPIs siempre sea oscuro */
     div[data-testid="metric-container"] * {
         color: #2C3E50 !important;
     }
@@ -56,7 +55,6 @@ colores_profesionales = px.colors.qualitative.Pastel
 # ==========================================
 st.sidebar.title("Panel de Control")
 
-# Botón de Actualización Inteligente (Limpia la memoria Caché)
 if st.sidebar.button("🔄 Actualizar / Recargar Plataforma", use_container_width=True):
     st.cache_data.clear() 
     st.rerun()
@@ -74,14 +72,12 @@ with st.sidebar.expander("📂 Carga de Datos", expanded=True):
 def cargar_y_limpiar_datos(archivo, url_gs):
     df_temp = None
     
-    # 1. Cargar archivo local
     if archivo is not None:
         if archivo.name.endswith('.csv'):
             df_temp = pd.read_csv(archivo)
         else:
             df_temp = pd.read_excel(archivo)
             
-    # 2. Cargar Google Sheets
     elif url_gs:
         try:
             match = re.search(r'/d/([a-zA-Z0-9-_]+)', url_gs)
@@ -92,7 +88,6 @@ def cargar_y_limpiar_datos(archivo, url_gs):
         except Exception:
             pass 
             
-    # 3. Datos de prueba por defecto
     if df_temp is None:
         datos_prueba = {
             'ID_Muestra': ['CAP-01', 'CAP-02', 'CAP-03'],
@@ -109,7 +104,6 @@ def cargar_y_limpiar_datos(archivo, url_gs):
         }
         df_temp = pd.DataFrame(datos_prueba)
 
-    # --- MODO A PRUEBA DE BALAS (Corrector de Columnas) ---
     sinonimos_columnas = {
         'Lat': 'Latitud', 'LATITUD': 'Latitud', 'lat': 'Latitud',
         'Lon': 'Longitud', 'LONGITUD': 'Longitud', 'lng': 'Longitud', 'Long': 'Longitud',
@@ -198,7 +192,6 @@ with st.sidebar.expander("📥 Exportar Datos", expanded=False):
     csv_export = df_filtrado.to_csv(index=False).encode('utf-8')
     st.download_button(label="Descargar CSV Filtrado", data=csv_export, file_name='cenizas_filtradas.csv', mime='text/csv', use_container_width=True)
 
-# --- FUNCIONES DE IMAGEN ---
 def obtener_url_imagen(url_original):
     url_limpia = str(url_original).strip()
     if "|" in url_limpia:
@@ -256,9 +249,11 @@ else:
     # --- PESTAÑA 1: MAPAS ESPACIALES ---
     with tab_mapa:
         st.subheader("Distribución Espacial de Muestras y Depósitos")
+        
+        # NUEVA OPCIÓN AÑADIDA: Isopacas Matemáticas
         tipo_mapa = st.radio(
             "Seleccione la vista espacial:", 
-            ["📍 Puntos de Recolección (2D)", "🔥 Mapa de Calor (2D)", "🌋 Vista 3D (Volumen de Depósito)"], 
+            ["📍 Puntos de Recolección (2D)", "🔥 Mapa de Calor (2D)", "🌋 Vista 3D (Volumen de Depósito)", "🎯 Isopacas Matemáticas (Contornos)"], 
             horizontal=True
         )
         st.markdown("---")
@@ -301,6 +296,62 @@ else:
                 else:
                     st.warning("No hay datos de 'Espesor_Deposito_mm' para construir el volumen 3D.")
             
+            # --- LA NUEVA MAGIA: CÁLCULO DE ISOPACAS MATEMÁTICAS ---
+            elif "Isopacas" in tipo_mapa:
+                df_iso = df_mapa.dropna(subset=['Espesor_Deposito_mm']).copy()
+                if len(df_iso) < 3:
+                    st.warning("⚠️ Se requieren al menos 3 muestras con datos de espesor para calcular las curvas de isopacas matemáticas.")
+                else:
+                    st.info("💡 Este modelo interpola matemáticamente el espesor de la ceniza creando un mapa topológico (isopacas).")
+                    
+                    # Límites del área
+                    lon_min, lon_max = df_iso['Longitud'].min(), df_iso['Longitud'].max()
+                    lat_min, lat_max = df_iso['Latitud'].min(), df_iso['Latitud'].max()
+                    
+                    margen_lon = (lon_max - lon_min) * 0.2 if lon_max != lon_min else 0.05
+                    margen_lat = (lat_max - lat_min) * 0.2 if lat_max != lat_min else 0.05
+                    
+                    # Crear grilla espacial (Grid)
+                    lon_grid = np.linspace(lon_min - margen_lon, lon_max + margen_lon, 150)
+                    lat_grid = np.linspace(lat_min - margen_lat, lat_max + margen_lat, 150)
+                    grid_lon, grid_lat = np.meshgrid(lon_grid, lat_grid)
+                    
+                    # Interpolación de espesores
+                    grid_z = griddata(
+                        (df_iso['Longitud'], df_iso['Latitud']),
+                        df_iso['Espesor_Deposito_mm'],
+                        (grid_lon, grid_lat),
+                        method='linear' # Evita curvaturas excesivas con pocos puntos
+                    )
+                    
+                    fig_iso = go.Figure()
+                    
+                    # Trazar contornos de Isopacas
+                    fig_iso.add_trace(go.Contour(
+                        x=lon_grid, y=lat_grid, z=grid_z,
+                        colorscale='Reds',
+                        contours=dict(showlabels=True, labelfont=dict(size=12, color='white')),
+                        name='Espesor interpolado (mm)',
+                        opacity=0.85
+                    ))
+                    
+                    # Trazar puntos de las muestras
+                    fig_iso.add_trace(go.Scatter(
+                        x=df_iso['Longitud'], y=df_iso['Latitud'],
+                        mode='markers+text',
+                        text=df_iso['ID_Muestra'],
+                        textposition='top center',
+                        marker=dict(size=9, color='#1C2833', symbol='x'),
+                        name='Puntos de Muestra'
+                    ))
+                    
+                    fig_iso.update_layout(
+                        xaxis_title="Longitud", yaxis_title="Latitud",
+                        plot_bgcolor='#FAFAFA',
+                        height=550, margin=dict(l=0, r=0, t=30, b=0)
+                    )
+                    st.plotly_chart(fig_iso, use_container_width=True)
+
             else:
                 m = folium.Map(location=[centro_lat, centro_lon], zoom_start=11, tiles='CartoDB positron')
                 
@@ -510,7 +561,6 @@ else:
             )
             st.plotly_chart(fig_ternary, use_container_width=True)
 
-        # --- NUEVO PASO 2: GRÁFICA DE ÁREA APILADA TEMPORAL ---
         st.markdown("---")
         st.subheader("📊 Evolución Mineralógica Temporal")
         st.write("Muestra cómo cambia la proporción de los componentes de la ceniza con el paso de los días (promedio diario).")
@@ -520,10 +570,7 @@ else:
             df_pct_area = df_pct_filtrado.loc[df_temp_area.index].copy()
             df_pct_area['Fecha_Recoleccion'] = df_temp_area['Fecha_Recoleccion']
             
-            # Agrupar por fecha calculando el promedio de cada componente
             df_area_grouped = df_pct_area.groupby('Fecha_Recoleccion')[cols_conteo].mean().reset_index()
-            
-            # Transformar formato para plotly
             df_area_melted = df_area_grouped.melt(id_vars='Fecha_Recoleccion', value_vars=cols_conteo, var_name='Componente', value_name='Porcentaje')
             
             fig_area = px.area(
@@ -531,7 +578,6 @@ else:
                 color_discrete_map=color_map_oficial,
                 labels={"Fecha_Recoleccion": "Fecha", "Porcentaje": "Proporción (%)"}
             )
-            # Asegurar que el eje Y siempre cubra de 0 a 100%
             fig_area.update_layout(yaxis=dict(range=[0, 100]), margin=dict(t=20, b=20, l=10, r=10))
             st.plotly_chart(fig_area, use_container_width=True)
         else:
