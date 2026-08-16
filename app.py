@@ -199,7 +199,8 @@ else:
         )
         fig_barras.update_traces(texttemplate='%{text:.1f}%', textposition='inside')
         st.plotly_chart(fig_barras, use_container_width=True)
-st.markdown("---")
+
+        st.markdown("---")
         
         st.subheader("Tendencia: Tamaño de Grano vs. Mineralogía")
         if 'Tamaño_Promedio_mm' in df_filtrado.columns:
