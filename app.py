@@ -58,13 +58,12 @@ def obtener_nombre_foto(url_original):
     return "Archivo Google Drive" if ("drive.google.com" in url_limpia or not nombre_sin_ext) else nombre_sin_ext
 
 # ==========================================
-# 3. MOTOR DE DATOS CACHEADO (ULTRA RÁPIDO Y SEGURO)
+# 3. MOTOR DE DATOS CACHEADO
 # ==========================================
 @st.cache_data(show_spinner="Descargando, limpiando y optimizando base de datos...")
 def cargar_y_limpiar_datos(archivo, url_gs):
     df_temp = None
     
-    # Carga de datos
     if archivo is not None:
         df_temp = pd.read_csv(archivo) if archivo.name.endswith('.csv') else pd.read_excel(archivo)
     elif url_gs:
@@ -73,7 +72,6 @@ def cargar_y_limpiar_datos(archivo, url_gs):
             if match: df_temp = pd.read_csv(f"https://docs.google.com/spreadsheets/d/{match.group(1)}/export?format=csv")
         except Exception: pass 
             
-    # Datos de prueba si no hay inputs
     if df_temp is None:
         datos_prueba = {
             'ID_Muestra': ['CAP-01', 'CAP-02', 'CAP-03'], 'Vereda': ['Chapio', 'Quintana', 'Coconuco'],
@@ -81,12 +79,10 @@ def cargar_y_limpiar_datos(archivo, url_gs):
             'Tamaño_Promedio_mm': [0.5, 0.8, 2.1], 'Espesor_Deposito_mm': [10, 5, 2],
             'Fecha_Recoleccion': ['2026-08-01', '2026-08-05', '2026-08-10'],
             'LV1': [50, 20, 10], 'LVA1': [28, 15, 5], 'Plagioclasa': [69, 40, 10], 'FV1': [20, 50, 80], 'Cuarzo': [2, 5, 0],
-            'URLs_Fotos': ['LVA1 | https://raw.githubusercontent.com/usuario/repo/main/foto_lv1.jpg, Plagioclasa | https://drive.google.com/uc?id=12345', '', ''],
-            'Enlace_Reporte': ['https://docs.google.com/', '', '']
+            'URLs_Fotos': ['', '', ''], 'Enlace_Reporte': ['https://docs.google.com/', '', '']
         }
         df_temp = pd.DataFrame(datos_prueba)
 
-    # Corrector de columnas automáticos
     sinonimos = {
         'Lat': 'Latitud', 'LATITUD': 'Latitud', 'lat': 'Latitud', 'Lon': 'Longitud', 'LONGITUD': 'Longitud', 'lng': 'Longitud',
         'Fecha': 'Fecha_Recoleccion', 'fecha': 'Fecha_Recoleccion', 'Date': 'Fecha_Recoleccion',
@@ -95,30 +91,25 @@ def cargar_y_limpiar_datos(archivo, url_gs):
     }
     df_temp = df_temp.rename(columns=lambda x: sinonimos.get(str(x).strip(), x))
     
-    # Limpieza de fechas
     if 'Fecha_Recoleccion' in df_temp.columns:
         df_temp['Fecha_Recoleccion'] = pd.to_datetime(df_temp['Fecha_Recoleccion'], errors='coerce')
 
-    # Identificación de minerales y cálculos matemáticos pesados en Caché
     cols_info = ['ID_Muestra', 'Vereda', 'Latitud', 'Longitud', 'Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'URLs_Fotos', 'URL_Microscopio', 'Fecha_Recoleccion', 'Enlace_Reporte']
     cols_conteo = [col for col in df_temp.columns if col not in cols_info]
     
-    # Forzar columnas numéricas (Evita colapsos si escriben "Trazas" o "N/A" en Excel)
     for col in cols_conteo + ['Tamaño_Promedio_mm', 'Espesor_Deposito_mm']:
-        if col in df_temp.columns:
-            df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce').fillna(0)
+        if col in df_temp.columns: df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce').fillna(0)
 
     df_temp['Total_Granos'] = df_temp[cols_conteo].sum(axis=1)
     
     df_pct_temp = df_temp.copy()
     for col in cols_conteo:
-        # Previene división por cero
         df_pct_temp[col] = (df_temp[col] / df_temp['Total_Granos'].replace(0, 1)) * 100 
 
     return df_temp, df_pct_temp, cols_conteo
 
 # ==========================================
-# 4. MÓDULOS DE RENDERIZADO (VISTAS AISLADAS Y BLINDADAS)
+# 4. MÓDULOS DE RENDERIZADO (VISTAS AISLADAS)
 # ==========================================
 
 def renderizar_kpis(df_fil, cols_conteo):
@@ -133,8 +124,8 @@ def renderizar_kpis(df_fil, cols_conteo):
 
 def renderizar_mapa(df_fil, archivo_geo):
     try:
-        st.subheader("Distribución Espacial de Muestras y Depósitos")
-        tipo_mapa = st.radio("Seleccione la vista espacial:", ["📍 Puntos (2D)", "🔥 Calor (2D)", "🌋 Vista 3D (Volumen)", "🎯 Isopacas (Contornos)"], horizontal=True)
+        st.subheader("Distribución Espacial Base")
+        tipo_mapa = st.radio("Seleccione la vista espacial:", ["📍 Puntos (2D)", "🔥 Calor (2D)", "🌋 Vista 3D (Volumen)"], horizontal=True)
         st.markdown("---")
         
         df_mapa = df_fil.dropna(subset=['Latitud', 'Longitud']).copy()
@@ -151,20 +142,6 @@ def renderizar_mapa(df_fil, archivo_geo):
             vista = pdk.ViewState(longitude=c_lon, latitude=c_lat, zoom=10.5, pitch=55, bearing=20)
             st.pydeck_chart(pdk.Deck(layers=[capa], initial_view_state=vista, tooltip={"html": "<b>{ID_Muestra}</b><br>Espesor: {Espesor_Deposito_mm} mm", "style": {"color": "white"}}, map_style='dark'), use_container_width=True)
             
-        elif "Isopacas" in tipo_mapa:
-            df_iso = df_mapa.dropna(subset=['Espesor_Deposito_mm']).copy()
-            if len(df_iso) < 3: return st.warning("⚠️ Se requieren al menos 3 puntos con espesor para isopacas.")
-            st.info("💡 Este modelo interpola matemáticamente el espesor creando un mapa topológico (isopacas).")
-            x_min, x_max, y_min, y_max = df_iso['Longitud'].min(), df_iso['Longitud'].max(), df_iso['Latitud'].min(), df_iso['Latitud'].max()
-            grid_x, grid_y = np.meshgrid(np.linspace(x_min - 0.05, x_max + 0.05, 150), np.linspace(y_min - 0.05, y_max + 0.05, 150))
-            grid_z = griddata((df_iso['Longitud'], df_iso['Latitud']), df_iso['Espesor_Deposito_mm'], (grid_x, grid_y), method='linear')
-            fig_iso = go.Figure(data=[
-                go.Contour(x=grid_x[0], y=grid_y[:,0], z=grid_z, colorscale='Reds', contours=dict(showlabels=True), opacity=0.85),
-                go.Scatter(x=df_iso['Longitud'], y=df_iso['Latitud'], mode='markers+text', text=df_iso['ID_Muestra'], textposition='top center', marker=dict(size=9, color='#1C2833', symbol='x'))
-            ])
-            fig_iso.update_layout(xaxis_title="Longitud", yaxis_title="Latitud", height=550, margin=dict(l=0, r=0, t=30, b=0))
-            st.plotly_chart(fig_iso, use_container_width=True)
-
         else:
             m = folium.Map(location=[c_lat, c_lon], zoom_start=11, tiles='CartoDB positron')
             folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Relieve Topográfico', overlay=False).add_to(m)
@@ -181,9 +158,70 @@ def renderizar_mapa(df_fil, archivo_geo):
                 if not h_data.empty: HeatMap([[r['Latitud'], r['Longitud'], r['Espesor_Deposito_mm']*2] for _, r in h_data.iterrows()], radius=25, blur=15).add_to(m)
             folium.LayerControl().add_to(m)
             st_folium(m, width="100%", height=550)
-    except Exception as e: st.error(f"⚠️ Error al renderizar el mapa espacial. Verifica tus datos de Latitud y Longitud. ({e})")
+    except Exception as e: st.error(f"⚠️ Error al renderizar el mapa espacial: {e}")
 
-def renderizar_composicion(df_fil, df_pct_fil, cols_conteo):
+# --- EL NUEVO MÓDULO ROBUSTO PARA EL OVSPO ---
+def renderizar_modelamiento(df_fil):
+    try:
+        st.subheader("Modelamiento Espacial Volcánico")
+        st.write("Generación de curvas de isovalores mediante interpolación matemática de datos de campo.")
+        
+        tipo_modelo = st.radio("Seleccione el modelo a generar:", ["🌋 Isopacas (Espesor del Depósito)", "🪨 Isopletas (Tamaño Máximo/Promedio de Grano)"], horizontal=True)
+        st.markdown("---")
+        
+        columna_objetivo = 'Espesor_Deposito_mm' if 'Isopacas' in tipo_modelo else 'Tamaño_Promedio_mm'
+        
+        # Limpieza rigurosa para modelos matemáticos
+        df_mod = df_fil.dropna(subset=['Latitud', 'Longitud', columna_objetivo]).copy()
+        
+        # Agrupar coordenadas exactas tomando el valor máximo (enfoque conservador para amenazas volcánicas)
+        df_mod = df_mod.groupby(['Latitud', 'Longitud'], as_index=False).agg({columna_objetivo: 'max', 'ID_Muestra': 'first'})
+        
+        if len(df_mod) < 4:
+            return st.warning(f"⚠️ Se requieren al menos 4 muestras con datos válidos de '{columna_objetivo}' y coordenadas distintas para garantizar una interpolación matemática segura.")
+
+        x, y, z = df_mod['Longitud'].values, df_mod['Latitud'].values, df_mod[columna_objetivo].values
+        
+        # Generar grilla de alta resolución con márgenes adaptables
+        margen_x = (x.max() - x.min()) * 0.2 if x.max() != x.min() else 0.05
+        margen_y = (y.max() - y.min()) * 0.2 if y.max() != y.min() else 0.05
+        
+        grid_x, grid_y = np.mgrid[x.min()-margen_x:x.max()+margen_x:200j, y.min()-margen_y:y.max()+margen_y:200j]
+        
+        # Algoritmo de interpolación: Intentar Cúbico (más suave), sino Lineal
+        try:
+            grid_z = griddata((x, y), z, (grid_x, grid_y), method='cubic')
+        except:
+            grid_z = griddata((x, y), z, (grid_x, grid_y), method='linear')
+            
+        fig_iso = go.Figure()
+        
+        # Curvas de nivel
+        fig_iso.add_trace(go.Contour(
+            x=grid_x[:,0], y=grid_y[0,:], z=grid_z.T,
+            colorscale='Reds' if 'Isopacas' in tipo_modelo else 'Viridis',
+            contours=dict(showlabels=True, labelfont=dict(size=12, color='white')),
+            name=f'{columna_objetivo} interpolado',
+            opacity=0.85
+        ))
+        
+        # Puntos reales
+        fig_iso.add_trace(go.Scatter(
+            x=x, y=y, mode='markers+text', text=df_mod['ID_Muestra'],
+            textposition='top center', marker=dict(size=9, color='#1C2833', symbol='x'),
+            name='Estaciones de Muestreo'
+        ))
+        
+        fig_iso.update_layout(
+            xaxis_title="Longitud", yaxis_title="Latitud",
+            plot_bgcolor='#FAFAFA', height=600, margin=dict(l=0, r=0, t=30, b=0)
+        )
+        st.plotly_chart(fig_iso, use_container_width=True)
+        st.caption("*Nota: La interpolación en los bordes del área muestreada puede presentar alta incertidumbre matemática.*")
+        
+    except Exception as e: st.error(f"⚠️ Error matemático en el modelamiento espacial: {e}")
+
+def renderizar_composicion(df_fil, df_pct_fil, cols_conteo, fotos_subidas):
     try:
         st.subheader("Caracterización Mineralógica Individual")
         lista = df_fil["ID_Muestra"].tolist()
@@ -219,24 +257,46 @@ def renderizar_composicion(df_fil, df_pct_fil, cols_conteo):
             </div>""", unsafe_allow_html=True)
 
         with col_f:
-            if "URLs_Fotos" in d_crudo and pd.notna(d_crudo["URLs_Fotos"]):
+            # INTEGRACIÓN DEL CARGADOR DE FOTOS LOCALES
+            fotos_locales_muestra = [f for f in fotos_subidas if m_sel.lower() in f.name.lower()]
+            
+            if fotos_locales_muestra:
+                st.write("📷 **Fotografías Locales Cargadas:**")
+                k_est = f"foto_loc_{m_sel}"
+                if k_est not in st.session_state: st.session_state[k_est] = 0
+                
+                # Filtrar si se clickea un mineral
+                if min_clic:
+                    for i, f_obj in enumerate(fotos_locales_muestra):
+                        if min_clic.lower() in f_obj.name.lower(): st.session_state[k_est] = i; break
+                
+                b1, tx, b2 = st.columns([1, 2, 1])
+                if b1.button("⬅️ Anterior", key=f"pl_{m_sel}"): st.session_state[k_est] = (st.session_state[k_est] - 1) % len(fotos_locales_muestra)
+                tx.markdown(f"<div style='text-align:center; margin-top:8px;'>Foto {st.session_state[k_est]+1}/{len(fotos_locales_muestra)}</div>", unsafe_allow_html=True)
+                if b2.button("Siguiente ➡️", key=f"nl_{m_sel}"): st.session_state[k_est] = (st.session_state[k_est] + 1) % len(fotos_locales_muestra)
+                
+                foto_act = fotos_locales_muestra[st.session_state[k_est]]
+                st.image(foto_act, caption=f"Archivo: {foto_act.name}", use_container_width=True)
+
+            elif "URLs_Fotos" in d_crudo and pd.notna(d_crudo["URLs_Fotos"]):
                 links = [u.strip() for u in str(d_crudo["URLs_Fotos"]).split(",") if u.strip().lower() != "nan"]
                 if links:
-                    k_est = f"foto_{m_sel}"
+                    st.write("🔗 **Registro Fotográfico en la Nube:**")
+                    k_est = f"foto_url_{m_sel}"
                     if k_est not in st.session_state: st.session_state[k_est] = 0
                     if min_clic:
                         for i, l in enumerate(links):
                             if min_clic.lower() in l.lower(): st.session_state[k_est] = i; break
                     
                     b1, tx, b2 = st.columns([1, 2, 1])
-                    if b1.button("⬅️ Anterior", key=f"p_{m_sel}"): st.session_state[k_est] = (st.session_state[k_est] - 1) % len(links)
+                    if b1.button("⬅️ Anterior", key=f"pu_{m_sel}"): st.session_state[k_est] = (st.session_state[k_est] - 1) % len(links)
                     tx.markdown(f"<div style='text-align:center; margin-top:8px;'>Foto {st.session_state[k_est]+1}/{len(links)}</div>", unsafe_allow_html=True)
-                    if b2.button("Siguiente ➡️", key=f"n_{m_sel}"): st.session_state[k_est] = (st.session_state[k_est] + 1) % len(links)
+                    if b2.button("Siguiente ➡️", key=f"nu_{m_sel}"): st.session_state[k_est] = (st.session_state[k_est] + 1) % len(links)
                     
                     l_act = links[st.session_state[k_est]]
                     st.image(obtener_url_imagen(l_act), caption=f"{m_sel} | {obtener_nombre_foto(l_act)}", use_container_width=True)
-                else: st.info("Sin enlaces válidos.")
-            else: st.info("Sin registro fotográfico.")
+                else: st.info("Sube las fotos en el menú lateral o pega los enlaces en la base de datos.")
+            else: st.info("Sube las fotos en el menú lateral o pega los enlaces en la base de datos.")
     except Exception as e: st.error(f"⚠️ Error renderizando composición de muestra: {e}")
 
 def renderizar_analisis(df_fil, df_pct_fil, cols_conteo):
@@ -317,19 +377,20 @@ st.sidebar.title("Panel de Control")
 if st.sidebar.button("🔄 Actualizar Datos de Origen", use_container_width=True): st.cache_data.clear(); st.rerun()
 st.sidebar.markdown("---")
 
-with st.sidebar.expander("📂 Archivos", expanded=True):
+with st.sidebar.expander("📂 Carga de Datos", expanded=True):
     url_gs = st.text_input("🔗 Link Google Sheets (Público)", placeholder="Pega el link...")
     a_sub = st.file_uploader("O Excel/CSV Local", type=["xlsx", "csv"])
     a_geo = st.file_uploader("Capa Veredas (.geojson)", type=["geojson", "json"])
+    st.markdown("---")
+    st.markdown("<small><i>Sube varias fotos a la vez y se asignarán automáticamente según el ID en su nombre.</i></small>", unsafe_allow_html=True)
+    fotos_subidas = st.file_uploader("📷 Subir Fotos (Multiselección)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
-# Motor extrae la data ya masticada
 df_bruto, df_pct_bruto, c_conteo = cargar_y_limpiar_datos(a_sub, url_gs)
 
 if df_bruto.empty:
     st.error("No se detectaron datos válidos.")
     st.stop()
 
-# Filtros
 st.sidebar.markdown("---")
 with st.sidebar.expander("🗺️ Filtros Espaciales"):
     v_unicas = sorted(df_bruto.get('Vereda', pd.Series()).dropna().unique().tolist())
@@ -353,14 +414,16 @@ df_fil, df_pct_fil = df_bruto[m_v & m_f], df_pct_bruto[m_v & m_f]
 
 if df_fil.empty: st.warning("⚠️ Sin resultados para los filtros aplicados.")
 else:
-    # --- RENDERIZADO VISUAL EN 10 LÍNEAS ---
     st.sidebar.download_button("📥 Descargar CSV Filtrado", df_fil.to_csv(index=False).encode('utf-8'), 'cenizas.csv', 'text/csv', use_container_width=True)
     
     renderizar_kpis(df_fil, c_conteo)
-    t1, t2, t3, t4, t5 = st.tabs(["Mapa de Distribución", "Análisis de Muestra", "Análisis Avanzado", "Tamaño de Grano", "➕ Datos Crudos"])
+    
+    # NUEVA PESTAÑA AÑADIDA: Modelamiento (Isopacas/Isopletas)
+    t1, t2, t3, t4, t5, t6 = st.tabs(["Distribución", "Composición", "Análisis Avanzado", "Tamaño", "🗺️ Modelamiento", "➕ Datos Crudos"])
     
     with t1: renderizar_mapa(df_fil, a_geo)
-    with t2: renderizar_composicion(df_fil, df_pct_fil, c_conteo)
+    with t2: renderizar_composicion(df_fil, df_pct_fil, c_conteo, fotos_subidas)
     with t3: renderizar_analisis(df_fil, df_pct_fil, c_conteo)
     with t4: renderizar_tamano(df_fil, df_pct_fil, c_conteo)
-    with t5: renderizar_datos(df_fil)
+    with t5: renderizar_modelamiento(df_fil)
+    with t6: renderizar_datos(df_fil)
