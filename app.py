@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import folium
-from folium.plugins import MarkerCluster
+from folium.plugins import MarkerCluster, HeatMap
 from streamlit_folium import st_folium
 import re
 
@@ -109,28 +109,65 @@ else:
         "Mapa de Distribución", "Análisis de Muestra", "Análisis Avanzado", "Verificación de Campo", "Base de Datos"
     ])
 
-    # --- PESTAÑA 1: MAPA ---
+    # --- PESTAÑA 1: MAPAS ESPACIALES ---
     with tab_mapa:
+        # Usamos columnas para poner botones o selectores encima del mapa
+        st.subheader("Distribución Espacial de Muestras y Depósitos")
+        
+        # Un selector para que el usuario decida qué tipo de mapa quiere ver
+        tipo_mapa = st.radio(
+            "Seleccione la vista espacial:",
+            ["📍 Puntos de Recolección (Muestras individuales)", "🔥 Mapa de Calor (Espesor del depósito)"],
+            horizontal=True
+        )
+        
+        st.markdown("---")
+        
         centro_lat = df_filtrado['Latitud'].mean()
         centro_lon = df_filtrado['Longitud'].mean()
-        m = folium.Map(location=[centro_lat, centro_lon], zoom_start=11, tiles='CartoDB positron') # Mapa base más limpio
-        marker_cluster = MarkerCluster().add_to(m)
+        m = folium.Map(location=[centro_lat, centro_lon], zoom_start=11, tiles='CartoDB positron')
         
-        for idx, row in df_filtrado.iterrows():
-            html_popup = f"""
-            <div style='width:200px; font-family:sans-serif;'>
-            <b>ID: {row.get('ID_Muestra', 'N/A')}</b><br>
-            <b>Vereda:</b> {row.get('Vereda', 'N/A')}<br>
-            <b>Fecha:</b> {row['Fecha_Recoleccion'].strftime('%Y-%m-%d') if pd.notna(row.get('Fecha_Recoleccion')) else 'N/A'}<br>
-            </div>
-            """
-            folium.Marker(
-                location=[row['Latitud'], row['Longitud']],
-                popup=folium.Popup(html_popup, max_width=300),
-                tooltip=str(row.get('ID_Muestra', 'Muestra')),
-                icon=folium.Icon(color="darkblue", icon="info-sign")
-            ).add_to(marker_cluster)
+        if "Puntos" in tipo_mapa:
+            # Dibuja el mapa normal con los puntos
+            marker_cluster = MarkerCluster().add_to(m)
             
+            for idx, row in df_filtrado.iterrows():
+                html_popup = f"""
+                <div style='width:200px; font-family:sans-serif;'>
+                <b>ID: {row.get('ID_Muestra', 'N/A')}</b><br>
+                <b>Vereda:</b> {row.get('Vereda', 'N/A')}<br>
+                <b>Fecha:</b> {row['Fecha_Recoleccion'].strftime('%Y-%m-%d') if 'Fecha_Recoleccion' in df_filtrado.columns and pd.notna(row.get('Fecha_Recoleccion')) else 'N/A'}<br>
+                <b>Espesor:</b> {row.get('Espesor_Deposito_mm', 'N/A')} mm
+                </div>
+                """
+                folium.Marker(
+                    location=[row['Latitud'], row['Longitud']],
+                    popup=folium.Popup(html_popup, max_width=300),
+                    tooltip=str(row.get('ID_Muestra', 'Muestra')),
+                    icon=folium.Icon(color="darkblue", icon="info-sign")
+                ).add_to(marker_cluster)
+                
+        else:
+            # Dibuja el Mapa de Calor (Heatmap)
+            st.info("El mapa de calor muestra la concentración basada en la variable 'Espesor_Deposito_mm'. Zonas rojas indican mayor acumulación de ceniza.")
+            
+            if 'Espesor_Deposito_mm' in df_filtrado.columns:
+                # Filtrar datos que sí tienen valores válidos de lat/lon y espesor
+                heat_data = df_filtrado.dropna(subset=['Latitud', 'Longitud', 'Espesor_Deposito_mm'])
+                
+                # Crear la lista de datos que necesita folium: [Latitud, Longitud, Peso]
+                # Multiplicamos el peso para que el mapa resalte visualmente los cambios
+                heat_points = [[row['Latitud'], row['Longitud'], float(row['Espesor_Deposito_mm']) * 2] for index, row in heat_data.iterrows()]
+                
+                HeatMap(
+                    heat_points, 
+                    radius=25, # Qué tan grande es la mancha de calor
+                    blur=15,   # Qué tan difuminados están los bordes
+                    gradient={0.2: 'blue', 0.5: 'yellow', 1.0: 'red'} # Colores (Azul = poco, Rojo = mucho)
+                ).add_to(m)
+            else:
+                st.warning("No se puede generar el mapa de calor porque falta la columna 'Espesor_Deposito_mm' en tu base de datos.")
+                
         st_folium(m, width="100%", height=550)
 
     # --- PESTAÑA 2: COMPOSICIÓN (MÚLTIPLES FOTOS) ---
