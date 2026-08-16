@@ -56,17 +56,48 @@ colores_profesionales = px.colors.qualitative.Pastel
 # ==========================================
 st.sidebar.title("Panel de Control")
 
-with st.sidebar.expander("📂 Carga de Archivos", expanded=True):
-    archivo_subido = st.file_uploader("Cargar Base de Datos (.xlsx / .csv)", type=["xlsx", "csv"])
+# --- BOTÓN DE ACTUALIZACIÓN ---
+if st.sidebar.button("🔄 Actualizar / Recargar Plataforma", use_container_width=True):
+    st.rerun()
+st.sidebar.markdown("---")
+
+with st.sidebar.expander("📂 Carga de Datos", expanded=True):
+    # NUEVO: Input para el enlace de Google Sheets
+    url_google_sheets = st.text_input("🔗 Enlace de Google Sheets", placeholder="Pega aquí el enlace de tu Google Sheets...")
+    st.markdown("<small><i>*Asegúrate de que el Sheets tenga acceso para 'Cualquier persona con el enlace'.</i></small>", unsafe_allow_html=True)
+    st.markdown("---")
+    archivo_subido = st.file_uploader("O Cargar Base Local (.xlsx / .csv)", type=["xlsx", "csv"])
     archivo_geojson = st.file_uploader("Cargar Capa Veredas (.geojson)", type=["geojson", "json"])
 
+# --- LÓGICA DE CARGA DE DATOS ---
+df = None
+
+# 1. Prioridad: Archivo local subido manualmente
 if archivo_subido is not None:
     if archivo_subido.name.endswith('.csv'):
         df = pd.read_csv(archivo_subido)
     else:
         df = pd.read_excel(archivo_subido)
-else:
-    st.info("Carga tu base de datos para iniciar. Mostrando entorno de prueba.")
+
+# 2. Segunda opción: Google Sheets
+elif url_google_sheets:
+    try:
+        # Extraer el ID del documento usando una expresión regular
+        match = re.search(r'/d/([a-zA-Z0-9-_]+)', url_google_sheets)
+        if match:
+            sheet_id = match.group(1)
+            # Construir la URL de exportación directa a CSV
+            csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+            df = pd.read_csv(csv_url)
+            st.sidebar.success("✅ Conectado a Google Sheets")
+        else:
+            st.sidebar.error("❌ El enlace de Google Sheets no parece válido.")
+    except Exception as e:
+        st.sidebar.error(f"❌ Error al leer Google Sheets: Verifica que el enlace sea público.")
+
+# 3. Fallback: Datos de prueba si no hay nada cargado
+if df is None:
+    st.info("Pega tu enlace de Google Sheets o carga un archivo local para iniciar. Mostrando entorno de prueba.")
     datos_prueba = {
         'ID_Muestra': ['CAP-01', 'CAP-02', 'CAP-03'],
         'Vereda': ['Chapio', 'Quintana', 'Coconuco'],
@@ -360,7 +391,6 @@ else:
             if eventos_grafica and "selection" in eventos_grafica and eventos_grafica["selection"]["points"]:
                 mineral_cliqueado = eventos_grafica["selection"]["points"][0]["label"]
 
-            # --- DETALLES DE CAMPO EN UNA SOLA LÍNEA HORIZONTAL ---
             vereda_val = datos_m_crudos.get('Vereda', 'N/A')
             fecha_val = pd.to_datetime(datos_m_crudos['Fecha_Recoleccion']).strftime('%Y-%m-%d') if 'Fecha_Recoleccion' in datos_m_crudos and pd.notna(datos_m_crudos['Fecha_Recoleccion']) else 'N/A'
             tamano_val = f"{datos_m_crudos.get('Tamaño_Promedio_mm', 'N/A')} mm"
