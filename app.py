@@ -19,12 +19,22 @@ st.markdown("""
 
 st.title("AshViewer-CVLC | Plataforma de Análisis de Cenizas Volcánicas")
 
+# ==========================================
 # 2. CARGA DE DATOS Y PANEL LATERAL
+# ==========================================
 st.sidebar.title("Panel de Control")
 
+# --- DESPLEGABLE 1: CARGA DE ARCHIVOS ---
 with st.sidebar.expander("📂 Carga de Archivos", expanded=True):
     archivo_subido = st.file_uploader("Cargar Base de Datos (.xlsx / .csv)", type=["xlsx", "csv"])
     archivo_geojson = st.file_uploader("Cargar Capa Veredas (.geojson)", type=["geojson", "json"])
+
+# Verificación de archivo de base de datos
+if archivo_subido is not None:
+    if archivo_subido.name.endswith('.csv'):
+        df = pd.read_csv(archivo_subido)
+    else:
+        df = pd.read_excel(archivo_subido)
 else:
     st.info("Carga tu base de datos para iniciar. Mostrando entorno de prueba.")
     datos_prueba = {
@@ -58,65 +68,66 @@ for col in cols_conteo:
 # 3. FILTROS AVANZADOS EN LA BARRA LATERAL
 # ==========================================
 st.sidebar.markdown("---")
-st.sidebar.subheader("⚙️ Filtros Espaciales y Temporales")
 
-# --- FILTRO 1: VEREDAS ---
-if 'Vereda' in df.columns:
-    veredas_unicas = sorted(df['Vereda'].dropna().unique().tolist())
+# --- DESPLEGABLE 2: FILTRO ESPACIAL ---
+with st.sidebar.expander("🗺️ Filtros Espaciales", expanded=False):
+    if 'Vereda' in df.columns:
+        veredas_unicas = sorted(df['Vereda'].dropna().unique().tolist())
 
-    if "veredas_selected" not in st.session_state:
-        st.session_state["veredas_selected"] = veredas_unicas
+        if "veredas_selected" not in st.session_state:
+            st.session_state["veredas_selected"] = veredas_unicas
 
-    def seleccionar_todas_veredas():
-        st.session_state["veredas_selected"] = veredas_unicas
+        def seleccionar_todas_veredas():
+            st.session_state["veredas_selected"] = veredas_unicas
 
-    def limpiar_todas_veredas():
-        st.session_state["veredas_selected"] = []
+        def limpiar_todas_veredas():
+            st.session_state["veredas_selected"] = []
 
-    col_v1, col_v2 = st.sidebar.columns(2)
-    with col_v1:
-        st.button("Todas", on_click=seleccionar_todas_veredas, use_container_width=True)
-    with col_v2:
-        st.button("Limpiar", on_click=limpiar_todas_veredas, use_container_width=True)
+        col_v1, col_v2 = st.columns(2)
+        with col_v1:
+            st.button("Todas", on_click=seleccionar_todas_veredas, use_container_width=True)
+        with col_v2:
+            st.button("Limpiar", on_click=limpiar_todas_veredas, use_container_width=True)
 
-    veredas_seleccionadas = st.sidebar.multiselect(
-        "Localidad / Vereda:",
-        options=veredas_unicas,
-        key="veredas_selected"
-    )
-else:
-    veredas_seleccionadas = []
-
-# --- FILTRO 2: FECHA ---
-if 'Fecha_Recoleccion' in df.columns and not df['Fecha_Recoleccion'].isnull().all():
-    df['Anio'] = df['Fecha_Recoleccion'].dt.year
-    df['Mes_Num'] = df['Fecha_Recoleccion'].dt.month
-
-    dic_meses = {
-        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
-        7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
-    }
-
-    anios_disponibles = ["Todos los Años"] + sorted([int(a) for a in df['Anio'].dropna().unique()], reverse=True)
-    anio_sel = st.sidebar.selectbox("Año de Recolección:", anios_disponibles)
-
-    if anio_sel != "Todos los Años":
-        df_anio = df[df['Anio'] == anio_sel]
-        meses_nums = sorted(df_anio['Mes_Num'].dropna().unique())
-        opciones_meses = ["Todos los Meses"] + [dic_meses[m] for m in meses_nums]
+        veredas_seleccionadas = st.multiselect(
+            "Localidad / Vereda:",
+            options=veredas_unicas,
+            key="veredas_selected"
+        )
     else:
-        opciones_meses = ["Todos los Meses"] + [dic_meses[m] for m in range(1, 13)]
+        veredas_seleccionadas = []
 
-    mes_sel = st.sidebar.selectbox("Mes de Recolección:", opciones_meses)
+# --- DESPLEGABLE 3: FILTRO TEMPORAL ---
+with st.sidebar.expander("📅 Filtros Temporales", expanded=False):
+    if 'Fecha_Recoleccion' in df.columns and not df['Fecha_Recoleccion'].isnull().all():
+        df['Anio'] = df['Fecha_Recoleccion'].dt.year
+        df['Mes_Num'] = df['Fecha_Recoleccion'].dt.month
 
-    mask_fecha = pd.Series(True, index=df.index)
-    if anio_sel != "Todos los Años":
-        mask_fecha = mask_fecha & (df['Anio'] == anio_sel)
-    if mes_sel != "Todos los Meses":
-        num_mes_elegido = [k for k, v in dic_meses.items() if v == mes_sel][0]
-        mask_fecha = mask_fecha & (df['Mes_Num'] == num_mes_elegido)
-else:
-    mask_fecha = pd.Series(True, index=df.index)
+        dic_meses = {
+            1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
+            7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+        }
+
+        anios_disponibles = ["Todos los Años"] + sorted([int(a) for a in df['Anio'].dropna().unique()], reverse=True)
+        anio_sel = st.selectbox("Año de Recolección:", anios_disponibles)
+
+        if anio_sel != "Todos los Años":
+            df_anio = df[df['Anio'] == anio_sel]
+            meses_nums = sorted(df_anio['Mes_Num'].dropna().unique())
+            opciones_meses = ["Todos los Meses"] + [dic_meses[m] for m in meses_nums]
+        else:
+            opciones_meses = ["Todos los Meses"] + [dic_meses[m] for m in range(1, 13)]
+
+        mes_sel = st.selectbox("Mes de Recolección:", opciones_meses)
+
+        mask_fecha = pd.Series(True, index=df.index)
+        if anio_sel != "Todos los Años":
+            mask_fecha = mask_fecha & (df['Anio'] == anio_sel)
+        if mes_sel != "Todos los Meses":
+            num_mes_elegido = [k for k, v in dic_meses.items() if v == mes_sel][0]
+            mask_fecha = mask_fecha & (df['Mes_Num'] == num_mes_elegido)
+    else:
+        mask_fecha = pd.Series(True, index=df.index)
 
 # --- APLICACIÓN DE FILTROS ---
 mask_vereda = df['Vereda'].isin(veredas_seleccionadas) if veredas_seleccionadas else pd.Series(True, index=df.index)
@@ -133,7 +144,9 @@ def obtener_url_imagen(url_original):
             return f"https://drive.google.com/uc?id={match.group(0)}"
     return url_limpia
 
+# ==========================================
 # 4. DASHBOARD PRINCIPAL
+# ==========================================
 if df_filtrado.empty:
     st.warning("No se encontraron registros bajo los parámetros seleccionados.")
 else:
@@ -159,7 +172,6 @@ else:
         centro_lon = df_filtrado['Longitud'].mean()
         m = folium.Map(location=[centro_lat, centro_lon], zoom_start=11, tiles='CartoDB positron')
         
-        # --- NUEVO: Integración de GeoJSON al mapa ---
         if archivo_geojson is not None:
             geo_data = json.load(archivo_geojson)
             folium.GeoJson(
@@ -171,7 +183,7 @@ else:
                     'weight': 1.5,
                     'fillOpacity': 0.15
                 }
-                # tooltip=folium.GeoJsonTooltip(fields=['NOMBRE'], aliases=['Vereda:']) <- ESTO ERA LO QUE ROMPÍA LA APP
+                # tooltip=folium.GeoJsonTooltip(fields=['NOMBRE'], aliases=['Vereda:']) <- Ajustar según tu capa
             ).add_to(m)
 
         if "Puntos" in tipo_mapa:
@@ -232,11 +244,9 @@ else:
             fig_pie.update_traces(textposition="inside", textinfo="percent+label")
             fig_pie.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=450, clickmode='event+select')
             
-            # --- NUEVO: Captura de clic en la torta ---
             eventos_grafica = st.plotly_chart(fig_pie, use_container_width=True, on_select="rerun", key=f"pie_{muestra_sel}")
             
             if eventos_grafica and "selection" in eventos_grafica and eventos_grafica["selection"]["points"]:
-                # Extrae la etiqueta del pedazo cliqueado
                 mineral_cliqueado = eventos_grafica["selection"]["points"][0]["label"]
 
         with col_foto:
@@ -253,10 +263,8 @@ else:
                     if clave_estado not in st.session_state:
                         st.session_state[clave_estado] = 0
 
-                    # --- NUEVO: Sincronización clic -> foto ---
                     if mineral_cliqueado:
                         st.success(f"Buscando foto para: **{mineral_cliqueado}**")
-                        # Busca si el nombre del mineral está en el link (ignorando mayúsculas)
                         for idx, link in enumerate(urls_limpias):
                             if mineral_cliqueado.lower() in link.lower():
                                 st.session_state[clave_estado] = idx
@@ -318,18 +326,11 @@ else:
 
         st.markdown("---")
 
-        # --- NUEVO: DIAGRAMA TERNARIO ---
-        st.subheader("🔺 Diagrama Ternario de Clasificación")
-        st.markdown("---")
-
-        # --- NUEVO: DIAGRAMA TERNARIO ESTANDARIZADO (V-L-C) ---
         st.subheader("🔺 Clasificación Petrológica de Cenizas (V-L-C)")
         st.write("Agrupación estándar en Vidrio (Vitric), Líticos (Lithic) y Cristales (Crystal).")
         
-        # Agrupación inteligente de componentes
         cols_vidrio = [c for c in cols_conteo if 'FV' in c.upper() or 'VIDRIO' in c.upper()]
         cols_liticos = [c for c in cols_conteo if 'LV' in c.upper() or 'LÍTICO' in c.upper() or 'LITICO' in c.upper()]
-        # Todo lo que no cumpla las reglas anteriores, se clasifica como cristal
         cols_cristales = [c for c in cols_conteo if c not in cols_vidrio + cols_liticos]
 
         df_ternary = df_filtrado.copy()
@@ -351,7 +352,6 @@ else:
                 color_discrete_sequence=colores_profesionales,
             )
             
-            # Mejorar la visualización del triángulo
             fig_ternary.update_layout(
                 ternary=dict(
                     sum=100,
@@ -363,7 +363,6 @@ else:
             )
             st.plotly_chart(fig_ternary, use_container_width=True)
             
-            # Acordeón para transparencia científica
             with st.expander("🔍 Ver detalle de la agrupación"):
                 st.write(f"**Vidrio:** {', '.join(cols_vidrio) if cols_vidrio else 'Ninguno detectado'}")
                 st.write(f"**Líticos:** {', '.join(cols_liticos) if cols_liticos else 'Ninguno detectado'}")
@@ -372,10 +371,9 @@ else:
             st.info("No hay datos suficientes para clasificar las muestras en el diagrama V-L-C.")
 
         st.markdown("---")
-        # --- NUEVO: LÍNEA DE TIEMPO DEL TAMAÑO DE GRANO ---
+        
         st.subheader("📈 Evolución Temporal del Tamaño de Grano")
         if 'Fecha_Recoleccion' in df_filtrado.columns and 'Tamaño_Promedio_mm' in df_filtrado.columns:
-            # Limpiar datos sin fecha o tamaño y ordenarlos cronológicamente
             df_tiempo = df_filtrado.dropna(subset=['Fecha_Recoleccion', 'Tamaño_Promedio_mm']).sort_values(by='Fecha_Recoleccion')
             
             if not df_tiempo.empty:
@@ -394,7 +392,6 @@ else:
 
         st.markdown("---")
         
-        # --- ORIGINAL: TENDENCIA TAMAÑO VS MINERALOGÍA ---
         st.subheader("🔬 Relación: Tamaño de Grano vs. Mineralogía")
         if 'Tamaño_Promedio_mm' in df_filtrado.columns:
             mineral_tendencia = st.selectbox("Seleccione componente a analizar:", cols_conteo, key="tendencia_mineral")
