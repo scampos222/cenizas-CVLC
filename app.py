@@ -5,11 +5,11 @@ import folium
 from folium.plugins import MarkerCluster, HeatMap
 from streamlit_folium import st_folium
 import re
+import json
 
 # 1. CONFIGURACIÓN INSTITUCIONAL
 st.set_page_config(page_title="AshViewer-CVLC", layout="wide")
 
-# Forzar un estilo limpio usando CSS inyectado
 st.markdown("""
     <style>
     .main {background-color: #FAFAFA;}
@@ -22,6 +22,9 @@ st.title("AshViewer-CVLC | Plataforma de Análisis de Cenizas Volcánicas")
 # 2. CARGA DE DATOS Y PANEL LATERAL
 st.sidebar.title("Panel de Control")
 archivo_subido = st.sidebar.file_uploader("Cargar Base de Datos (.xlsx / .csv)", type=["xlsx", "csv"])
+
+# --- NUEVO: Carga de GeoJSON ---
+archivo_geojson = st.sidebar.file_uploader("Cargar Capa Veredas (.geojson)", type=["geojson", "json"])
 
 if archivo_subido is not None:
     if archivo_subido.name.endswith('.csv'):
@@ -36,17 +39,16 @@ else:
         'Latitud': [2.443, 2.450, 2.341], 
         'Longitud': [-76.606, -76.610, -76.510],
         'Tamaño_Promedio_mm': [0.5, 0.8, 2.1],
-        'Espesor_Deposito_mm': [10, 5, 2], # Nueva variable para el futuro mapa
+        'Espesor_Deposito_mm': [10, 5, 2],
         'Fecha_Recoleccion': ['2026-08-01', '2026-08-05', '2026-08-10'],
         'LV1': [50, 20, 10], 'LVA1': [28, 15, 5], 'Plagioclasa': [69, 40, 10],
         'FV1': [20, 50, 80], 'Cuarzo': [2, 5, 0],
-        'URLs_Fotos': ['https://drive.google.com/uc?id=1cmIiAIVyRSGl5lmngEA24AY7bL6ZhxX3, https://drive.google.com/uc?id=1uvB0MrDh8n2buLHX-vB4nHe5h12FT86z', '', ''],
+        'URLs_Fotos': ['https://raw.githubusercontent.com/usuario/repo/main/foto_plagioclasa.jpg, https://raw.githubusercontent.com/usuario/repo/main/foto_lv1.jpg', '', ''],
         'Enlace_Reporte': ['https://docs.google.com/', '', '']
     }
     df = pd.DataFrame(datos_prueba)
 
 # --- PROCESAMIENTO ---
-# Asegurar formato de fecha si existe
 if 'Fecha_Recoleccion' in df.columns:
     df['Fecha_Recoleccion'] = pd.to_datetime(df['Fecha_Recoleccion'], errors='coerce')
 
@@ -64,29 +66,25 @@ for col in cols_conteo:
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ Filtros Espaciales y Temporales")
 
-# --- FILTRO 1: VEREDAS (Con Funciones Callback Corregidas) ---
+# --- FILTRO 1: VEREDAS ---
 if 'Vereda' in df.columns:
     veredas_unicas = sorted(df['Vereda'].dropna().unique().tolist())
 
-    # Inicializar la clave en session_state si no existe
     if "veredas_selected" not in st.session_state:
         st.session_state["veredas_selected"] = veredas_unicas
 
-    # Funciones de callback para actualizar el estado antes de renderizar
     def seleccionar_todas_veredas():
         st.session_state["veredas_selected"] = veredas_unicas
 
     def limpiar_todas_veredas():
         st.session_state["veredas_selected"] = []
 
-    # Botones de gestión rápida
     col_v1, col_v2 = st.sidebar.columns(2)
     with col_v1:
         st.button("Todas", on_click=seleccionar_todas_veredas, use_container_width=True)
     with col_v2:
         st.button("Limpiar", on_click=limpiar_todas_veredas, use_container_width=True)
 
-    # Widget Multiselect conectado a session_state
     veredas_seleccionadas = st.sidebar.multiselect(
         "Localidad / Vereda:",
         options=veredas_unicas,
@@ -95,9 +93,8 @@ if 'Vereda' in df.columns:
 else:
     veredas_seleccionadas = []
 
-# --- FILTRO 2: FECHA POR AÑO Y MES ---
+# --- FILTRO 2: FECHA ---
 if 'Fecha_Recoleccion' in df.columns and not df['Fecha_Recoleccion'].isnull().all():
-    # Asegurar formato datetime y extraer metadatos
     df['Anio'] = df['Fecha_Recoleccion'].dt.year
     df['Mes_Num'] = df['Fecha_Recoleccion'].dt.month
 
@@ -106,11 +103,9 @@ if 'Fecha_Recoleccion' in df.columns and not df['Fecha_Recoleccion'].isnull().al
         7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
     }
 
-    # Años disponibles en la base de datos
     anios_disponibles = ["Todos los Años"] + sorted([int(a) for a in df['Anio'].dropna().unique()], reverse=True)
     anio_sel = st.sidebar.selectbox("Año de Recolección:", anios_disponibles)
 
-    # Filtrar meses según el año seleccionado
     if anio_sel != "Todos los Años":
         df_anio = df[df['Anio'] == anio_sel]
         meses_nums = sorted(df_anio['Mes_Num'].dropna().unique())
@@ -120,34 +115,27 @@ if 'Fecha_Recoleccion' in df.columns and not df['Fecha_Recoleccion'].isnull().al
 
     mes_sel = st.sidebar.selectbox("Mes de Recolección:", opciones_meses)
 
-    # Construcción de la máscara lógica de fechas
     mask_fecha = pd.Series(True, index=df.index)
     if anio_sel != "Todos los Años":
         mask_fecha = mask_fecha & (df['Anio'] == anio_sel)
     if mes_sel != "Todos los Meses":
-        # Invertir diccionario para buscar el número del mes elegido
         num_mes_elegido = [k for k, v in dic_meses.items() if v == mes_sel][0]
         mask_fecha = mask_fecha & (df['Mes_Num'] == num_mes_elegido)
 else:
     mask_fecha = pd.Series(True, index=df.index)
 
-# --- APLICACIÓN GENERAL DE FILTROS ---
+# --- APLICACIÓN DE FILTROS ---
 mask_vereda = df['Vereda'].isin(veredas_seleccionadas) if veredas_seleccionadas else pd.Series(True, index=df.index)
 
 df_filtrado = df[mask_vereda & mask_fecha]
 df_pct_filtrado = df_pct[mask_vereda & mask_fecha]
-# Paleta de colores profesional
 colores_profesionales = px.colors.qualitative.Pastel
 
-# Función para limpiar links de Google Drive
-# Función mejorada y a prueba de errores para links de Drive
-# Función definitiva para imágenes de Drive
 def obtener_url_imagen(url_original):
     url_limpia = str(url_original).strip()
     if "drive.google.com" in url_limpia:
         match = re.search(r'[-\w]{25,}', url_limpia)
         if match:
-            # Forzamos el uso del visor directo de Drive
             return f"https://drive.google.com/uc?id={match.group(0)}"
     return url_limpia
 
@@ -157,17 +145,14 @@ if df_filtrado.empty:
 else:
     st.markdown("---")
     
-    # 5 Pestañas institucionales
     tab_mapa, tab_comp, tab_analisis, tab_reportes, tab_datos = st.tabs([
         "Mapa de Distribución", "Análisis de Muestra", "Análisis Avanzado", "Verificación de Campo", "Base de Datos"
     ])
 
     # --- PESTAÑA 1: MAPAS ESPACIALES ---
     with tab_mapa:
-        # Usamos columnas para poner botones o selectores encima del mapa
         st.subheader("Distribución Espacial de Muestras y Depósitos")
         
-        # Un selector para que el usuario decida qué tipo de mapa quiere ver
         tipo_mapa = st.radio(
             "Seleccione la vista espacial:",
             ["📍 Puntos de Recolección (Muestras individuales)", "🔥 Mapa de Calor (Espesor del depósito)"],
@@ -180,8 +165,22 @@ else:
         centro_lon = df_filtrado['Longitud'].mean()
         m = folium.Map(location=[centro_lat, centro_lon], zoom_start=11, tiles='CartoDB positron')
         
+        # --- NUEVO: Integración de GeoJSON al mapa ---
+        if archivo_geojson is not None:
+            geo_data = json.load(archivo_geojson)
+            folium.GeoJson(
+                geo_data,
+                name="Veredas",
+                style_function=lambda feature: {
+                    'fillColor': '#2980B9',
+                    'color': '#2C3E50',
+                    'weight': 1.5,
+                    'fillOpacity': 0.15
+                },
+                tooltip=folium.GeoJsonTooltip(fields=['NOMBRE'], aliases=['Vereda:']) # Cambia 'NOMBRE' si tu GeoJSON usa otro campo
+            ).add_to(m)
+
         if "Puntos" in tipo_mapa:
-            # Dibuja el mapa normal con los puntos
             marker_cluster = MarkerCluster().add_to(m)
             
             for idx, row in df_filtrado.iterrows():
@@ -201,44 +200,33 @@ else:
                 ).add_to(marker_cluster)
                 
         else:
-            # Dibuja el Mapa de Calor (Heatmap)
-            st.info("El mapa de calor muestra la concentración basada en la variable 'Espesor_Deposito_mm'. Zonas rojas indican mayor acumulación de ceniza.")
-            
+            st.info("El mapa de calor muestra la concentración basada en la variable 'Espesor_Deposito_mm'.")
             if 'Espesor_Deposito_mm' in df_filtrado.columns:
-                # Filtrar datos que sí tienen valores válidos de lat/lon y espesor
                 heat_data = df_filtrado.dropna(subset=['Latitud', 'Longitud', 'Espesor_Deposito_mm'])
-                
-                # Crear la lista de datos que necesita folium: [Latitud, Longitud, Peso]
-                # Multiplicamos el peso para que el mapa resalte visualmente los cambios
                 heat_points = [[row['Latitud'], row['Longitud'], float(row['Espesor_Deposito_mm']) * 2] for index, row in heat_data.iterrows()]
-                
                 HeatMap(
                     heat_points, 
-                    radius=25, # Qué tan grande es la mancha de calor
-                    blur=15,   # Qué tan difuminados están los bordes
-                    gradient={0.2: 'blue', 0.5: 'yellow', 1.0: 'red'} # Colores (Azul = poco, Rojo = mucho)
+                    radius=25, blur=15, 
+                    gradient={0.2: 'blue', 0.5: 'yellow', 1.0: 'red'}
                 ).add_to(m)
             else:
-                st.warning("No se puede generar el mapa de calor porque falta la columna 'Espesor_Deposito_mm' en tu base de datos.")
+                st.warning("Falta la columna 'Espesor_Deposito_mm' en tu base de datos.")
                 
         st_folium(m, width="100%", height=550)
 
-  # --- PESTAÑA 2: COMPOSICIÓN Y CARRUSEL DE FOTOS ---
+    # --- PESTAÑA 2: COMPOSICIÓN Y CARRUSEL ---
     with tab_comp:
         st.subheader("Caracterización Mineralógica Individual")
-        muestra_sel = st.selectbox(
-            "Seleccione ID de Muestra:", df_filtrado["ID_Muestra"]
-        )
+        muestra_sel = st.selectbox("Seleccione ID de Muestra:", df_filtrado["ID_Muestra"])
 
-        datos_muestra_pct = df_pct_filtrado[
-            df_pct_filtrado["ID_Muestra"] == muestra_sel
-        ][cols_conteo].iloc[0]
+        datos_muestra_pct = df_pct_filtrado[df_pct_filtrado["ID_Muestra"] == muestra_sel][cols_conteo].iloc[0]
         datos_grafica = datos_muestra_pct[datos_muestra_pct > 0].reset_index()
         datos_grafica.columns = ["Componente", "Porcentaje"]
 
-        # PROPORCIÓN: 1.8 para la Torta (protagonista), 1 para la Foto
         col_graf, col_foto = st.columns([1.8, 1])
         
+        mineral_cliqueado = None
+
         with col_graf:
             fig_pie = px.pie(
                 datos_grafica,
@@ -248,50 +236,53 @@ else:
                 color_discrete_sequence=colores_profesionales,
             )
             fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-            fig_pie.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=450)
-            st.plotly_chart(fig_pie, use_container_width=True)
+            fig_pie.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=450, clickmode='event+select')
+            
+            # --- NUEVO: Captura de clic en la torta ---
+            eventos_grafica = st.plotly_chart(fig_pie, use_container_width=True, on_select="rerun", key=f"pie_{muestra_sel}")
+            
+            if eventos_grafica and "selection" in eventos_grafica and eventos_grafica["selection"]["points"]:
+                # Extrae la etiqueta del pedazo cliqueado
+                mineral_cliqueado = eventos_grafica["selection"]["points"][0]["label"]
 
         with col_foto:
-            datos_m_crudos = df_filtrado[
-                df_filtrado["ID_Muestra"] == muestra_sel
-            ].iloc[0]
+            datos_m_crudos = df_filtrado[df_filtrado["ID_Muestra"] == muestra_sel].iloc[0]
 
             if "URLs_Fotos" in datos_m_crudos and pd.notna(datos_m_crudos["URLs_Fotos"]):
                 urls_crudas = str(datos_m_crudos["URLs_Fotos"]).split(",")
-                urls_limpias = [
-                    u.strip()
-                    for u in urls_crudas
-                    if u.strip() and u.strip().lower() != "nan"
-                ]
+                urls_limpias = [u.strip() for u in urls_crudas if u.strip() and u.strip().lower() != "nan"]
 
                 if urls_limpias:
                     st.write("📷 **Registro Fotográfico:**")
-
                     clave_estado = f"foto_idx_{muestra_sel}"
+                    
                     if clave_estado not in st.session_state:
                         st.session_state[clave_estado] = 0
+
+                    # --- NUEVO: Sincronización clic -> foto ---
+                    if mineral_cliqueado:
+                        st.success(f"Buscando foto para: **{mineral_cliqueado}**")
+                        # Busca si el nombre del mineral está en el link (ignorando mayúsculas)
+                        for idx, link in enumerate(urls_limpias):
+                            if mineral_cliqueado.lower() in link.lower():
+                                st.session_state[clave_estado] = idx
+                                break
 
                     col_btn1, col_texto, col_btn2 = st.columns([1, 2, 1])
 
                     with col_btn1:
                         if st.button("⬅️ Anterior", key=f"prev_{muestra_sel}"):
-                            st.session_state[clave_estado] = (
-                                st.session_state[clave_estado] - 1
-                            ) % len(urls_limpias)
+                            st.session_state[clave_estado] = (st.session_state[clave_estado] - 1) % len(urls_limpias)
 
                     with col_texto:
                         st.markdown(
-                            f"<div style='text-align: center; margin-top: 8px;'>Foto "
-                            f"{st.session_state[clave_estado] + 1} de "
-                            f"{len(urls_limpias)}</div>",
+                            f"<div style='text-align: center; margin-top: 8px;'>Foto {st.session_state[clave_estado] + 1} de {len(urls_limpias)}</div>",
                             unsafe_allow_html=True,
                         )
 
                     with col_btn2:
                         if st.button("Siguiente ➡️", key=f"next_{muestra_sel}"):
-                            st.session_state[clave_estado] = (
-                                st.session_state[clave_estado] + 1
-                            ) % len(urls_limpias)
+                            st.session_state[clave_estado] = (st.session_state[clave_estado] + 1) % len(urls_limpias)
 
                     url_actual = urls_limpias[st.session_state[clave_estado]]
                     url_final = obtener_url_imagen(url_actual)
@@ -349,12 +340,12 @@ else:
             st.plotly_chart(fig_scatter, use_container_width=True)
         else:
             st.warning("No se encontró la columna 'Tamaño_Promedio_mm' en la base de datos.")
+            
     # --- PESTAÑA 4: REPORTES DE CAMPO ---
     with tab_reportes:
         st.subheader("Verificación Operativa")
         st.write("Consulte los reportes de campo asociados a las muestras consolidadas.")
         
-        # Tabla simplificada para verificación
         if 'Enlace_Reporte' in df_filtrado.columns:
             df_reportes = df_filtrado[['ID_Muestra', 'Vereda', 'Fecha_Recoleccion', 'Enlace_Reporte']].copy()
             st.dataframe(
