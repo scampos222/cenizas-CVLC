@@ -2,165 +2,163 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import folium
-from streamlit_folium import st_folium
 from folium.plugins import MarkerCluster
+from streamlit_folium import st_folium
 
-# 1. CONFIGURACIÓN DE PÁGINA (Debe ser la primera línea)
-st.set_page_config(page_title="Geovisor Pro de Cenizas", page_icon="🌋", layout="wide")
+# 1. CONFIGURACIÓN
+st.set_page_config(page_title="Geovisor de Cenizas Nivel Pro", layout="wide", page_icon="🌋")
+st.title("🌋 Geovisor Integral de Cenizas Volcánicas")
 
-# Custom CSS para que se vea más profesional
-st.markdown("""
-    <style>
-    .stMetric { background-color: #f0f2f6; padding: 15px; border-radius: 10px; }
-    </style>
-""", unsafe_allow_html=True)
+# 2. CARGA DE DATOS Y BARRA LATERAL
+st.sidebar.image("https://cdn-icons-png.flaticon.com/512/2909/2909592.png", width=100) # Logo de ejemplo
+st.sidebar.title("Panel de Control")
+archivo_subido = st.sidebar.file_uploader("📂 Sube tu Base de Datos (Excel/CSV)", type=["xlsx", "csv"])
 
-st.title("🌋 Geovisor Interactivo: Análisis de Cenizas Volcánicas")
-st.markdown("Plataforma de visualización y análisis mineralógico de muestras recolectadas.")
-
-# 2. CARGA DE DATOS (BARRA LATERAL)
-st.sidebar.image("https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Volcanic_ash.jpg/320px-Volcanic_ash.jpg", use_container_width=True)
-st.sidebar.title("📁 Gestión de Datos")
-archivo_subido = st.sidebar.file_uploader("Sube tu matriz de datos (Excel/CSV)", type=["xlsx", "csv"])
-
-# Función para cargar datos (evita que se recargue todo el tiempo)
-@st.cache_data
-def cargar_datos(archivo):
-    if archivo is not None:
-        if archivo.name.endswith('.csv'):
-            return pd.read_csv(archivo)
-        else:
-            return pd.read_excel(archivo)
+if archivo_subido is not None:
+    if archivo_subido.name.endswith('.csv'):
+        df = pd.read_csv(archivo_subido)
     else:
-        # DATOS DE PRUEBA: Centrados cerca al Puracé / Popayán
-        return pd.DataFrame({
-            'ID_Muestra': ['PUR-01', 'PUR-02', 'PUR-03', 'POP-01', 'POP-02'],
-            'Latitud': [2.330, 2.345, 2.320, 2.450, 2.440], 
-            'Longitud': [-76.390, -76.400, -76.380, -76.600, -76.610],
-            'Cuarzo_%': [15, 25, 10, 45, 50],
-            'Feldespato_%': [40, 35, 45, 20, 15],
-            'Vidrio_%': [45, 40, 45, 35, 35],
-            'URLs_Fotos': [
-                'https://upload.wikimedia.org/wikipedia/commons/4/4e/Volcanic_ash_under_light_microscope.jpg',
-                'https://upload.wikimedia.org/wikipedia/commons/4/4e/Volcanic_ash_under_light_microscope.jpg,https://upload.wikimedia.org/wikipedia/commons/1/1a/Volcanic_ash.jpg',
-                'https://upload.wikimedia.org/wikipedia/commons/1/1a/Volcanic_ash.jpg',
-                'https://upload.wikimedia.org/wikipedia/commons/4/4e/Volcanic_ash_under_light_microscope.jpg',
-                'https://upload.wikimedia.org/wikipedia/commons/1/1a/Volcanic_ash.jpg'
-            ]
-        })
+        df = pd.read_excel(archivo_subido)
+else:
+    # DATOS DE PRUEBA AVANZADOS
+    st.info("👆 Carga tu Excel. Mostrando datos de prueba de la región del Puracé/Popayán.")
+    datos_prueba = {
+        'ID_Muestra': ['CEN-01', 'CEN-02', 'CEN-03', 'CEN-04', 'CEN-05'],
+        'Vereda': ['Quintana', 'Poblazón', 'Quintana', 'Coconuco', 'Paletará'],
+        'Latitud': [2.443, 2.450, 2.435, 2.341, 2.152], 
+        'Longitud': [-76.606, -76.610, -76.590, -76.510, -76.621],
+        'Tamaño_Promedio_mm': [0.5, 0.8, 0.4, 2.1, 3.5], # Tamaños para tendencias
+        'Cuarzo_%': [40, 20, 50, 15, 10],
+        'Feldespato_%': [30, 50, 20, 25, 10],
+        'Vidrio_%': [20, 20, 20, 50, 70],
+        'Plagioclasa_%': [10, 10, 10, 10, 10], # Nuevo mineral
+        'URLs_Fotos': [
+            'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Volcanic_ash.jpg/320px-Volcanic_ash.jpg',
+            'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Volcanic_ash.jpg/320px-Volcanic_ash.jpg',
+            'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Volcanic_ash.jpg/320px-Volcanic_ash.jpg',
+            'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Volcanic_ash.jpg/320px-Volcanic_ash.jpg',
+            'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Volcanic_ash.jpg/320px-Volcanic_ash.jpg'
+        ],
+        'URL_Microscopio': [
+            'https://upload.wikimedia.org/wikipedia/commons/thumb/7/70/Volcanic_sand_from_the_black_sand_beach_of_Punalu%CA%BBu.jpg/800px-Volcanic_sand_from_the_black_sand_beach_of_Punalu%CA%BBu.jpg',
+            'https://upload.wikimedia.org/wikipedia/commons/thumb/7/70/Volcanic_sand_from_the_black_sand_beach_of_Punalu%CA%BBu.jpg/800px-Volcanic_sand_from_the_black_sand_beach_of_Punalu%CA%BBu.jpg',
+            'https://upload.wikimedia.org/wikipedia/commons/thumb/7/70/Volcanic_sand_from_the_black_sand_beach_of_Punalu%CA%BBu.jpg/800px-Volcanic_sand_from_the_black_sand_beach_of_Punalu%CA%BBu.jpg',
+            'https://upload.wikimedia.org/wikipedia/commons/thumb/7/70/Volcanic_sand_from_the_black_sand_beach_of_Punalu%CA%BBu.jpg/800px-Volcanic_sand_from_the_black_sand_beach_of_Punalu%CA%BBu.jpg',
+            'https://upload.wikimedia.org/wikipedia/commons/thumb/7/70/Volcanic_sand_from_the_black_sand_beach_of_Punalu%CA%BBu.jpg/800px-Volcanic_sand_from_the_black_sand_beach_of_Punalu%CA%BBu.jpg'
+        ]
+    }
+    df = pd.DataFrame(datos_prueba)
 
-df = cargar_datos(archivo_subido)
-
-# 3. FILTROS AVANZADOS (BARRA LATERAL)
+# 3. FILTROS AVANZADOS
 st.sidebar.markdown("---")
-st.sidebar.subheader("🔍 Filtros de Mineralogía")
-filtro_cuarzo = st.sidebar.slider("Cuarzo (%)", int(df['Cuarzo_%'].min()), int(df['Cuarzo_%'].max()), (int(df['Cuarzo_%'].min()), int(df['Cuarzo_%'].max())))
-filtro_vidrio = st.sidebar.slider("Vidrio Volcánico (%)", int(df['Vidrio_%'].min()), int(df['Vidrio_%'].max()), (int(df['Vidrio_%'].min()), int(df['Vidrio_%'].max())))
+st.sidebar.subheader("🔍 Filtros de Búsqueda")
+
+# Filtro por Vereda
+veredas_unicas = df['Vereda'].unique().tolist()
+veredas_seleccionadas = st.sidebar.multiselect("Filtrar por Vereda:", veredas_unicas, default=veredas_unicas)
+
+min_cuarzo = st.sidebar.slider("Mínimo de Cuarzo (%):", 0, 100, 0)
+min_tamano = st.sidebar.slider("Tamaño mínimo (mm):", float(df['Tamaño_Promedio_mm'].min()), float(df['Tamaño_Promedio_mm'].max()), float(df['Tamaño_Promedio_mm'].min()))
 
 # Aplicar filtros
 df_filtrado = df[
-    (df['Cuarzo_%'] >= filtro_cuarzo[0]) & (df['Cuarzo_%'] <= filtro_cuarzo[1]) &
-    (df['Vidrio_%'] >= filtro_vidrio[0]) & (df['Vidrio_%'] <= filtro_vidrio[1])
+    (df['Cuarzo_%'] >= min_cuarzo) & 
+    (df['Tamaño_Promedio_mm'] >= min_tamano) &
+    (df['Vereda'].isin(veredas_seleccionadas))
 ]
 
-# 4. DASHBOARD DE MÉTRICAS (KPIs)
-st.markdown("### Resumen de Muestras Visibles")
-col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-col_m1.metric("Total Muestras", len(df_filtrado))
-if not df_filtrado.empty:
-    col_m2.metric("Promedio Cuarzo", f"{df_filtrado['Cuarzo_%'].mean():.1f}%")
-    col_m3.metric("Promedio Vidrio", f"{df_filtrado['Vidrio_%'].mean():.1f}%")
-    col_m4.metric("Máximo Feldespato", f"{df_filtrado['Feldespato_%'].max()}%")
-
-st.markdown("---")
-
+# 4. DASHBOARD (PESTAÑAS)
 if df_filtrado.empty:
-    st.error("No hay datos que coincidan con los filtros actuales.")
+    st.warning("No hay muestras con estos filtros.")
 else:
-    # 5. SISTEMA DE PESTAÑAS (TABS)
-    tab1, tab2, tab3 = st.tabs(["🗺️ Mapa Principal", "🔬 Análisis por Muestra y Fotos", "📋 Tabla de Datos"])
+    # Métricas rápidas arriba
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Muestras Visibles", len(df_filtrado))
+    c2.metric("Tamaño Promedio", f"{df_filtrado['Tamaño_Promedio_mm'].mean():.2f} mm")
+    c3.metric("Vidrio Promedio", f"{df_filtrado['Vidrio_%'].mean():.1f}%")
+    c4.metric("Cuarzo Promedio", f"{df_filtrado['Cuarzo_%'].mean():.1f}%")
+    st.markdown("---")
+
+    # Crear pestañas de navegación
+    tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Mapa Interactivo", "📊 Composición y Tendencias", "🔬 Visor AmScope (Microscopio)", "💾 Datos"])
 
     # --- PESTAÑA 1: MAPA ---
     with tab1:
-        st.markdown("### Distribución Espacial de las Muestras")
-        
-        # Calcular el centro del mapa
-        centro_lat = df_filtrado['Latitud'].mean()
-        centro_lon = df_filtrado['Longitud'].mean()
-        
-        # Crear mapa base de Folium (mejor para 130 puntos)
-        m = folium.Map(location=[centro_lat, centro_lon], zoom_start=11, tiles="CartoDB positron")
-        
-        # Agregar el Clustering (Agrupador de puntos)
-        marker_cluster = MarkerCluster().add_to(m)
-        
-        for idx, row in df_filtrado.iterrows():
-            # Crear ventana emergente (popup) al hacer clic en el mapa
-            popup_html = f"""
-            <b>Muestra:</b> {row['ID_Muestra']}<br>
-            <b>Cuarzo:</b> {row['Cuarzo_%']}%<br>
-            <b>Vidrio:</b> {row['Vidrio_%']}%
-            """
-            folium.Marker(
-                location=[row['Latitud'], row['Longitud']],
-                popup=folium.Popup(popup_html, max_width=200),
-                tooltip=f"Clic para ver: {row['ID_Muestra']}",
-                icon=folium.Icon(color="darkred", icon="info-sign")
-            ).add_to(marker_cluster)
+        col_mapa, col_info = st.columns([2, 1])
+        with col_mapa:
+            centro_lat = df_filtrado['Latitud'].mean()
+            centro_lon = df_filtrado['Longitud'].mean()
+            m = folium.Map(location=[centro_lat, centro_lon], zoom_start=10, tiles='OpenStreetMap')
             
-        # Mostrar el mapa en Streamlit
-        st_folium(m, width="100%", height=600, returned_objects=[])
+            # TODO: Aquí cargaremos el archivo GeoJSON de Veredas cuando lo consigas
+            
+            marker_cluster = MarkerCluster().add_to(m)
+            
+            for idx, row in df_filtrado.iterrows():
+                html_popup = f"""
+                <div style='width:200px'>
+                <b>{row['ID_Muestra']}</b><br>
+                <b>Vereda:</b> {row['Vereda']}<br>
+                <b>Tamaño:</b> {row['Tamaño_Promedio_mm']} mm<br>
+                </div>
+                """
+                folium.Marker(
+                    location=[row['Latitud'], row['Longitud']],
+                    popup=folium.Popup(html_popup, max_width=300),
+                    tooltip=row['ID_Muestra'],
+                    icon=folium.Icon(color="red", icon="info-sign")
+                ).add_to(marker_cluster)
+                
+            st_folium(m, width="100%", height=500)
 
-    # --- PESTAÑA 2: ANÁLISIS INDIVIDUAL Y FOTOS ---
+        with col_info:
+            st.info("💡 **Tip:** Haz clic en los grupos numéricos para acercarte a las muestras.")
+            muestra_sel = st.selectbox("Ver fotos de campo de:", df_filtrado['ID_Muestra'])
+            datos_m = df_filtrado[df_filtrado['ID_Muestra'] == muestra_sel].iloc[0]
+            urls = str(datos_m['URLs_Fotos']).split(',')
+            for url in urls:
+                if url.strip():
+                    st.image(url.strip(), use_container_width=True)
+
+    # --- PESTAÑA 2: COMPOSICIÓN Y TENDENCIAS ---
     with tab2:
-        col_select, col_empty = st.columns([1, 2])
-        with col_select:
-            muestra_seleccionada = st.selectbox("🔎 Busca o selecciona el ID de la muestra:", df_filtrado['ID_Muestra'])
+        col_graf1, col_graf2 = st.columns(2)
         
-        datos_muestra = df_filtrado[df_filtrado['ID_Muestra'] == muestra_seleccionada].iloc[0]
-        
-        col_grafica, col_fotos = st.columns([1, 1.5])
-        
-        with col_grafica:
-            st.markdown(f"#### Composición Mineralógica: `{muestra_seleccionada}`")
-            minerales = ['Cuarzo_%', 'Feldespato_%', 'Vidrio_%']
-            valores = [datos_muestra['Cuarzo_%'], datos_muestra['Feldespato_%'], datos_muestra['Vidrio_%']]
+        with col_graf1:
+            st.subheader("Composición Promedio de la Zona")
+            minerales = ['Cuarzo_%', 'Feldespato_%', 'Vidrio_%', 'Plagioclasa_%']
+            promedios = [df_filtrado[min].mean() for min in minerales]
+            fig_pie = px.pie(names=minerales, values=promedios, hole=0.3, color_discrete_sequence=px.colors.qualitative.Pastel)
+            st.plotly_chart(fig_pie, use_container_width=True)
             
-            fig_bar = px.bar(
-                x=minerales, y=valores, 
-                labels={'x': 'Mineral', 'y': 'Porcentaje (%)'},
-                color=minerales,
-                color_discrete_sequence=['#E6B8B8', '#B8CCE6', '#C1E6B8'] # Colores estéticos
+        with col_graf2:
+            st.subheader("📈 Tendencia: Tamaño vs Contenido de Vidrio")
+            # Gráfico de dispersión para ver correlaciones
+            fig_scatter = px.scatter(
+                df_filtrado, x="Tamaño_Promedio_mm", y="Vidrio_%", 
+                color="Vereda", hover_name="ID_Muestra",
+                size="Tamaño_Promedio_mm", # Los puntos más grandes = muestras más grandes
+                trendline="ols" # Línea de tendencia
             )
-            fig_bar.update_layout(showlegend=False)
-            st.plotly_chart(fig_bar, use_container_width=True)
-            
-        with col_fotos:
-            st.markdown(f"#### Registro Fotográfico")
-            # Soporte para múltiples fotos! (Separadas por coma en el Excel)
-            urls = str(datos_muestra['URLs_Fotos']).split(',')
-            
-            if len(urls) == 1 and urls[0] != 'nan' and urls[0] != '':
-                st.image(urls[0].strip(), caption=f"Foto de {muestra_seleccionada}", use_container_width=True)
-            elif len(urls) > 1:
-                # Si hay varias fotos, las mostramos en una galería (columnas)
-                galeria_cols = st.columns(len(urls))
-                for i, col_gal in enumerate(galeria_cols):
-                    with col_gal:
-                        st.image(urls[i].strip(), caption=f"Toma {i+1}", use_container_width=True)
-            else:
-                st.info("No hay fotografías disponibles para esta muestra.")
+            st.plotly_chart(fig_scatter, use_container_width=True)
 
-    # --- PESTAÑA 3: TABLA DE DATOS ---
+    # --- PESTAÑA 3: VISOR AMSCOPE ---
     with tab3:
-        st.markdown("### Matriz de Datos Filtrada")
-        st.dataframe(df_filtrado, use_container_width=True)
+        st.subheader("🔬 Análisis Microscópico Avanzado")
+        st.write("Selecciona una muestra para visualizar la captura del microscopio AmScope. Recomendamos imágenes con barra de escala incluida.")
         
-        # Botón para descargar los datos filtrados
-        csv = df_filtrado.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="⬇️ Descargar datos actuales (CSV)",
-            data=csv,
-            file_name='muestras_filtradas.csv',
-            mime='text/csv',
-        )
+        muestra_micro = st.selectbox("Seleccionar muestra para microscopía:", df_filtrado['ID_Muestra'], key="micro_sel")
+        datos_micro = df_filtrado[df_filtrado['ID_Muestra'] == muestra_micro].iloc[0]
+        
+        # Mostrar la imagen del microscopio en tamaño muy grande
+        url_micro = str(datos_micro.get('URL_Microscopio', ''))
+        if url_micro.strip() and url_micro != 'nan':
+            # use_container_width permite que la imagen sea responsiva y grande
+            st.image(url_micro.strip(), caption=f"Microfotografía AmScope - Muestra {muestra_micro}", use_container_width=True)
+        else:
+            st.warning("No hay foto de microscopio disponible para esta muestra.")
+
+    # --- PESTAÑA 4: DATOS CRUDOS ---
+    with tab4:
+        st.subheader("Tabla de Datos Filtrados")
+        st.dataframe(df_filtrado, use_container_width=True)
