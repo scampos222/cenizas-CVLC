@@ -316,26 +316,31 @@ else:
         if "idx_muestra_actual" not in st.session_state or st.session_state["idx_muestra_actual"] >= len(lista_muestras):
             st.session_state["idx_muestra_actual"] = 0
 
-        col_m_prev, col_m_select, col_m_next = st.columns([1, 3, 1])
+        # --- CORRECCIÓN DE ALINEACIÓN: BOTONES Y BUSCADOR ---
+        st.markdown("**🔍 Seleccione la Muestra a Analizar:**")
+        col_m_prev, col_m_select, col_m_next = st.columns([0.5, 4, 0.5])
         
         with col_m_prev:
-            if st.button("⬅️ Muestra Anterior", use_container_width=True):
+            if st.button("⬅️", use_container_width=True):
                 st.session_state["idx_muestra_actual"] = (st.session_state["idx_muestra_actual"] - 1) % len(lista_muestras)
                 st.rerun()
 
-        with col_m_next:
-            if st.button("Muestra Siguiente ➡️", use_container_width=True):
-                st.session_state["idx_muestra_actual"] = (st.session_state["idx_muestra_actual"] + 1) % len(lista_muestras)
-                st.rerun()
-
         with col_m_select:
+            # label_visibility="collapsed" es la clave para que la caja quede en la misma línea que los botones
             muestra_sel = st.selectbox(
-                "Seleccione ID de Muestra:", 
+                "ID de Muestra", 
                 options=lista_muestras, 
                 index=st.session_state["idx_muestra_actual"],
-                key="select_muestra_main"
+                key="select_muestra_main",
+                label_visibility="collapsed"
             )
             st.session_state["idx_muestra_actual"] = lista_muestras.index(muestra_sel)
+            
+        with col_m_next:
+            if st.button("➡️", use_container_width=True):
+                st.session_state["idx_muestra_actual"] = (st.session_state["idx_muestra_actual"] + 1) % len(lista_muestras)
+                st.rerun()
+        # ----------------------------------------------------
 
         datos_m_crudos = df_filtrado[df_filtrado["ID_Muestra"] == muestra_sel].iloc[0]
         
@@ -358,7 +363,6 @@ else:
             if eventos_grafica and "selection" in eventos_grafica and eventos_grafica["selection"]["points"]:
                 mineral_cliqueado = eventos_grafica["selection"]["points"][0]["label"]
 
-            # --- AQUÍ ESTÁ LA CORRECCIÓN: color:#1C2833 forzado ---
             vereda_val = datos_m_crudos.get('Vereda', 'N/A')
             fecha_val = pd.to_datetime(datos_m_crudos['Fecha_Recoleccion']).strftime('%Y-%m-%d') if 'Fecha_Recoleccion' in datos_m_crudos and pd.notna(datos_m_crudos['Fecha_Recoleccion']) else 'N/A'
             tamano_val = f"{datos_m_crudos.get('Tamaño_Promedio_mm', 'N/A')} mm"
