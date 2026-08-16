@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import io
 import base64
 import math
+import branca.colormap as cm
 
 # Intento de importar FPDF de forma segura
 try:
@@ -127,7 +128,6 @@ def cargar_y_limpiar_datos(archivo, url_gs):
     if 'Fecha_Recoleccion' in df_temp.columns:
         df_temp['Fecha_Recoleccion'] = pd.to_datetime(df_temp['Fecha_Recoleccion'], errors='coerce')
 
-    # Cálculos Geoespaciales y de Riesgo Automáticos
     if 'Latitud' in df_temp.columns and 'Longitud' in df_temp.columns:
         df_temp['Direccion_Viento'] = df_temp.apply(lambda x: calcular_azimut_y_direccion(x['Latitud'], x['Longitud']), axis=1)
     if 'Espesor_Deposito_mm' in df_temp.columns:
@@ -159,7 +159,6 @@ def renderizar_kpis(df_fil, cols_conteo):
         k2.metric("Espesor Máximo (mm)", df_fil['Espesor_Deposito_mm'].max() if 'Espesor_Deposito_mm' in df_fil.columns else "N/A")
         k3.metric("Mineral Dominante", df_fil[cols_conteo].sum().idxmax() if not df_fil[cols_conteo].empty else "N/A")
         
-        # Muestra el sector de mayor acumulación de ceniza
         dir_dom = df_fil['Direccion_Viento'].mode()[0] if 'Direccion_Viento' in df_fil.columns and not df_fil['Direccion_Viento'].empty else "N/A"
         k4.metric("Dispersión Predominante", dir_dom)
         
@@ -187,7 +186,6 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
             df_3d['Elev_V'] = df_3d['Espesor_Deposito_mm'] * 150 
             capa = pdk.Layer('ColumnLayer', data=df_3d, get_position='[Longitud, Latitud]', get_elevation='Elev_V', radius=150, get_fill_color='[200, 30, 30, 180]', pickable=True, auto_highlight=True)
             
-            # Agregamos el cráter al 3D
             crater_layer = pdk.Layer('ScatterplotLayer', data=[{'lat': LAT_CRATER, 'lon': LON_CRATER}], get_position='[lon, lat]', get_color='[255, 0, 0, 255]', get_radius=500, pickable=True)
             
             vista = pdk.ViewState(longitude=c_lon, latitude=c_lat, zoom=10.5, pitch=55, bearing=20)
@@ -198,7 +196,6 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
             folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', attr='Esri', overlay=False).add_to(m)
             folium.TileLayer('https://services.arcgis.com/WMSServer', attr='SGC', name='Amenaza (SGC)', overlay=True, opacity=0.7).add_to(m)
             
-            # 🌋 MARCADOR DEL CRÁTER EN MAPA
             folium.Marker([LAT_CRATER, LON_CRATER], tooltip="🌋 Cráter Volcán Puracé", icon=folium.Icon(color="red", icon="fire")).add_to(m)
 
             if archivo_geo: folium.GeoJson(json.load(archivo_geo), style_function=lambda f: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5, 'fillOpacity': 0.15}).add_to(m)
@@ -247,6 +244,16 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                     folium.raster_layers.ImageOverlay(image=img_url, bounds=[[lim_lat_min, lim_lon_min], [lim_lat_max, lim_lon_max]], opacity=0.75).add_to(m)
                     for _, r in df_mod.iterrows(): folium.CircleMarker([r['Latitud'], r['Longitud']], radius=3, color="black", fill=True, popup=f"{r[col_obj]}").add_to(m)
 
+                    # --- LEYENDA DINÁMICA DE COLORES ---
+                    min_val, max_val = float(z.min()), float(z.max())
+                    if "Isopacas" in tipo_mapa:
+                        colormap = cm.LinearColormap(colors=['#FEE0D2', '#FC9272', '#DE2D26', '#99000D'], vmin=min_val, vmax=max_val)
+                        colormap.caption = 'Espesor del Depósito (mm)'
+                    else:
+                        colormap = cm.LinearColormap(colors=['#440154', '#31688E', '#35B779', '#FDE725'], vmin=min_val, vmax=max_val)
+                        colormap.caption = 'Tamaño Promedio de Grano (mm)'
+                    m.add_child(colormap)
+
             folium.LayerControl().add_to(m)
             st_folium(m, width="100%", height=600)
 
@@ -256,7 +263,7 @@ def generar_pdf_reporte(m_sel, vereda, fecha, espesor, tamano, riesgo, df_graf):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", 'B', 16)
-    pdf.cell(200, 10, txt="REPORTE OFICIAL - OBSERVATORIO VULCANOLÓGICO", ln=True, align='C')
+    pdf.cell(200, 10, txt="REPORTE OFICIAL - OBSERVATORIO VULCANOLOGICO", ln=True, align='C')
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(200, 10, txt=f"Muestra: {m_sel}", ln=True, align='C')
     pdf.ln(10)
@@ -274,10 +281,9 @@ def generar_pdf_reporte(m_sel, vereda, fecha, espesor, tamano, riesgo, df_graf):
     for index, row in df_graf.iterrows():
         pdf.cell(200, 10, txt=f"- {row['Componente']}: {round(row['Porcentaje'], 2)}%", ln=True)
     
-    # Salida a Base64 para descarga en Streamlit
     pdf_output = pdf.output(dest='S').encode('latin-1')
     b64 = base64.b64encode(pdf_output).decode()
-    return f'<a href="data:application/pdf;base64,{b64}" download="Reporte_{m_sel}.pdf" class="button">📥 Descargar Ficha Técnica Oficial (PDF)</a>'
+    return f'<a href="data:application/pdf;base64,{b64}" download="Reporte_{m_sel}.pdf" class="button" style="text-decoration:none;background-color:#2980B9;color:white;padding:8px 12px;border-radius:5px;font-size:14px;font-weight:bold;">📥 Descargar Ficha Técnica (PDF)</a>'
 
 def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, fotos_subidas):
     try:
@@ -315,12 +321,11 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, fotos_subidas
                 🚨 <b>Alerta:</b> {d_crudo.get('Nivel_Riesgo', 'N/A')} &nbsp;|&nbsp; 🧭 <b>Viento:</b> {d_crudo.get('Direccion_Viento', 'N/A')}
             </div>""", unsafe_allow_html=True)
             
-            # BOTÓN PDF
             if PDF_DISPONIBLE:
                 pdf_html = generar_pdf_reporte(m_sel, d_crudo.get('Vereda','N/A'), f_val, f"{d_crudo.get('Espesor_Deposito_mm',0)} mm", f"{d_crudo.get('Tamaño_Promedio_mm',0)} mm", d_crudo.get('Nivel_Riesgo', 'N/A'), d_graf)
-                st.markdown(f"<div style='margin-top: 10px;'>{pdf_html}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='margin-top: 15px;'>{pdf_html}</div>", unsafe_allow_html=True)
             else:
-                st.info("⚠️ Agrega 'fpdf' al requirements.txt en GitHub para habilitar la descarga de PDF.")
+                st.info("⚠️ Agrega 'fpdf' al requirements.txt para habilitar PDFs.")
 
         with col_f:
             fotos_locales = [f for f in fotos_subidas if m_sel.lower() in f.name.lower()]
@@ -345,7 +350,6 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, fotos_subidas
                     tx.markdown(f"<div style='text-align:center; margin-top:8px;'>Foto {st.session_state[k_est]+1}/{len(links)}</div>", unsafe_allow_html=True)
                     if b2.button("➡️", key=f"nu_{m_sel}"): st.session_state[k_est] = (st.session_state[k_est] + 1) % len(links)
                     st.image(obtener_url_imagen(links[st.session_state[k_est]]), caption=f"{m_sel} | {obtener_nombre_foto(links[st.session_state[k_est]])}", use_container_width=True)
-                else: st.info("Sube las fotos en el panel izquierdo.")
 
         st.markdown("---")
         
@@ -372,7 +376,6 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, fotos_subidas
                 df_polar = df_fil.groupby('Direccion_Viento')['Espesor_Deposito_mm'].sum().reset_index()
                 fig_p = px.bar_polar(df_polar, r="Espesor_Deposito_mm", theta="Direccion_Viento", color="Espesor_Deposito_mm", template="plotly_white", color_continuous_scale="Reds", title="Rosa de Dispersión (Desde el Cráter)")
                 st.plotly_chart(fig_p, use_container_width=True)
-            else: st.info("Requiere datos espaciales para graficar dispersión.")
 
         st.markdown("---")
         
@@ -400,13 +403,10 @@ def renderizar_modulo_operativo(df_fil):
     try:
         st.subheader("Semáforo de Gestión del Riesgo y Operaciones")
         
-        # Tabla Operativa Mejorada
         cols_mostrar = ['ID_Muestra', 'Vereda', 'Fecha_Recoleccion', 'Espesor_Deposito_mm', 'Nivel_Riesgo', 'Enlace_Reporte']
         cols_existentes = [c for c in cols_mostrar if c in df_fil.columns]
-        
         df_mostrar = df_fil[cols_existentes].copy()
         
-        # Aplica color dinámico en la tabla (Funcionalidad avanzada de Streamlit)
         def color_riesgo(val):
             if 'Alto' in str(val): return 'background-color: #FADBD8; color: #78281F;'
             elif 'Medio' in str(val): return 'background-color: #FDEBD0; color: #7E5109;'
