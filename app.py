@@ -195,88 +195,99 @@ else:
         )
         st.markdown("---")
         
-        centro_lat = df_filtrado['Latitud'].mean()
-        centro_lon = df_filtrado['Longitud'].mean()
-
-        if "3D" in tipo_mapa:
-            st.info("Arrastra el mapa con el botón derecho del mouse (o presiona Shift + clic) para inclinar y rotar la vista 3D.")
-            df_3d = df_filtrado.dropna(subset=['Latitud', 'Longitud', 'Espesor_Deposito_mm']).copy()
-            
-            if not df_3d.empty:
-                df_3d['Elevacion_Visual'] = df_3d['Espesor_Deposito_mm'] * 150 
-                capa_columnas = pdk.Layer(
-                    'ColumnLayer',
-                    data=df_3d,
-                    get_position='[Longitud, Latitud]',
-                    get_elevation='Elevacion_Visual',
-                    elevation_scale=1,
-                    radius=150, 
-                    get_fill_color='[200, 30, 30, 180]', 
-                    pickable=True,
-                    auto_highlight=True,
-                )
-                vista_inicial = pdk.ViewState(
-                    longitude=centro_lon, latitude=centro_lat, zoom=10.5, pitch=55, bearing=20
-                )
-                mapa_3d = pdk.Deck(
-                    layers=[capa_columnas],
-                    initial_view_state=vista_inicial,
-                    tooltip={"html": "<b>Muestra:</b> {ID_Muestra} <br/> <b>Vereda:</b> {Vereda} <br/> <b>Espesor real:</b> {Espesor_Deposito_mm} mm", "style": {"color": "white"}},
-                    map_style='dark'
-                )
-                st.pydeck_chart(mapa_3d, use_container_width=True)
-            else:
-                st.warning("No hay datos de 'Espesor_Deposito_mm' para construir el volumen 3D.")
+        # 1. Blindaje: Filtramos datos válidos de latitud y longitud para evitar que Folium colapse
+        df_mapa = df_filtrado.dropna(subset=['Latitud', 'Longitud']).copy()
         
+        if df_mapa.empty:
+            st.warning("No hay datos con coordenadas (Latitud/Longitud) válidas para mostrar en el mapa.")
         else:
-            m = folium.Map(location=[centro_lat, centro_lon], zoom_start=11, tiles='CartoDB positron')
-            
-            # --- CAPA 1: RELIEVE TOPOGRÁFICO DE ESRI ---
-            folium.TileLayer(
-                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
-                attr='Esri',
-                name='Relieve Topográfico (Esri)',
-                overlay=False,
-                control=True
-            ).add_to(m)
+            centro_lat = df_mapa['Latitud'].mean()
+            centro_lon = df_mapa['Longitud'].mean()
 
-            # --- CAPA 2: MAPA DE AMENAZA (SGC / ArcGIS) ---
-            # 1. Pega tu enlace dentro de las comillas simples abajo
-            url_servicio_arcgis = 'PEGA_AQUI_TU_ENLACE' 
+            if "3D" in tipo_mapa:
+                st.info("Arrastra el mapa con el botón derecho del mouse (o presiona Shift + clic) para inclinar y rotar la vista 3D.")
+                df_3d = df_mapa.dropna(subset=['Espesor_Deposito_mm']).copy()
+                
+                if not df_3d.empty:
+                    df_3d['Elevacion_Visual'] = df_3d['Espesor_Deposito_mm'] * 150 
+                    capa_columnas = pdk.Layer(
+                        'ColumnLayer',
+                        data=df_3d,
+                        get_position='[Longitud, Latitud]',
+                        get_elevation='Elevacion_Visual',
+                        elevation_scale=1,
+                        radius=150, 
+                        get_fill_color='[200, 30, 30, 180]', 
+                        pickable=True,
+                        auto_highlight=True,
+                    )
+                    vista_inicial = pdk.ViewState(
+                        longitude=centro_lon, latitude=centro_lat, zoom=10.5, pitch=55, bearing=20
+                    )
+                    mapa_3d = pdk.Deck(
+                        layers=[capa_columnas],
+                        initial_view_state=vista_inicial,
+                        tooltip={"html": "<b>Muestra:</b> {ID_Muestra} <br/> <b>Vereda:</b> {Vereda} <br/> <b>Espesor real:</b> {Espesor_Deposito_mm} mm", "style": {"color": "white"}},
+                        map_style='dark'
+                    )
+                    st.pydeck_chart(mapa_3d, use_container_width=True)
+                else:
+                    st.warning("No hay datos de 'Espesor_Deposito_mm' para construir el volumen 3D.")
             
-            if url_servicio_arcgis != 'PEGA_AQUI_TU_ENLACE':
-                folium.raster_layers.WmsTileLayer(
-                    url=f"{url_servicio_arcgis}/WMSServer",
-                    layers='0',
-                    name='Mapa de Amenaza Oficial',
-                    fmt='image/png',
-                    transparent=True,
+            else:
+                # --- MAPA 2D ---
+                m = folium.Map(location=[centro_lat, centro_lon], zoom_start=11, tiles='CartoDB positron')
+                
+                # Capa 1: Relieve Topográfico
+                folium.TileLayer(
+                    tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+                    attr='Esri',
+                    name='Relieve Topográfico (Esri)',
+                    overlay=False,
                     control=True
                 ).add_to(m)
 
-            folium.LayerControl().add_to(m)
-            
-            if archivo_geojson is not None:
-                geo_data = json.load(archivo_geojson)
-                folium.GeoJson(
-                    geo_data, name="Veredas",
-                    style_function=lambda feature: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5, 'fillOpacity': 0.15}
-                ).add_to(m)
+                # Capa 2: Mapa Amenaza SGC
+                url_servicio_arcgis = 'PEGA_AQUI_TU_ENLACE' 
+                
+                if url_servicio_arcgis != 'PEGA_AQUI_TU_ENLACE':
+                    folium.raster_layers.WmsTileLayer(
+                        url=f"{url_servicio_arcgis}/WMSServer",
+                        layers='0',
+                        name='Mapa de Amenaza Oficial',
+                        fmt='image/png',
+                        transparent=True,
+                        control=True
+                    ).add_to(m)
+                
+                # Capa 3: GeoJSON Veredas
+                if archivo_geojson is not None:
+                    geo_data = json.load(archivo_geojson)
+                    folium.GeoJson(
+                        geo_data, name="Veredas",
+                        style_function=lambda feature: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5, 'fillOpacity': 0.15}
+                    ).add_to(m)
 
-            if "Puntos" in tipo_mapa:
-                marker_cluster = MarkerCluster().add_to(m)
-                for idx, row in df_filtrado.iterrows():
-                    html_popup = f"<div style='width:200px; font-family:sans-serif;'><b>ID: {row.get('ID_Muestra', 'N/A')}</b><br><b>Vereda:</b> {row.get('Vereda', 'N/A')}<br><b>Espesor:</b> {row.get('Espesor_Deposito_mm', 'N/A')} mm</div>"
-                    folium.Marker(location=[row['Latitud'], row['Longitud']], popup=folium.Popup(html_popup, max_width=300), tooltip=str(row.get('ID_Muestra', 'Muestra')), icon=folium.Icon(color="darkblue", icon="info-sign")).add_to(marker_cluster)
-            elif "Calor" in tipo_mapa:
-                if 'Espesor_Deposito_mm' in df_filtrado.columns:
-                    heat_data = df_filtrado.dropna(subset=['Latitud', 'Longitud', 'Espesor_Deposito_mm'])
-                    heat_points = [[row['Latitud'], row['Longitud'], float(row['Espesor_Deposito_mm']) * 2] for index, row in heat_data.iterrows()]
-                    HeatMap(heat_points, radius=25, blur=15, gradient={0.2: 'blue', 0.5: 'yellow', 1.0: 'red'}).add_to(m)
-                else:
-                    st.warning("Falta la columna 'Espesor_Deposito_mm' en tu base de datos.")
-                    
-            st_folium(m, width="100%", height=550)
+                # Capa 4: Puntos o Calor
+                if "Puntos" in tipo_mapa:
+                    marker_cluster = MarkerCluster().add_to(m)
+                    for idx, row in df_mapa.iterrows():
+                        html_popup = f"<div style='width:200px; font-family:sans-serif;'><b>ID: {row.get('ID_Muestra', 'N/A')}</b><br><b>Vereda:</b> {row.get('Vereda', 'N/A')}<br><b>Espesor:</b> {row.get('Espesor_Deposito_mm', 'N/A')} mm</div>"
+                        folium.Marker(location=[row['Latitud'], row['Longitud']], popup=folium.Popup(html_popup, max_width=300), tooltip=str(row.get('ID_Muestra', 'Muestra')), icon=folium.Icon(color="darkblue", icon="info-sign")).add_to(marker_cluster)
+                
+                elif "Calor" in tipo_mapa:
+                    if 'Espesor_Deposito_mm' in df_mapa.columns:
+                        heat_data = df_mapa.dropna(subset=['Espesor_Deposito_mm'])
+                        if not heat_data.empty:
+                            heat_points = [[row['Latitud'], row['Longitud'], float(row['Espesor_Deposito_mm']) * 2] for index, row in heat_data.iterrows()]
+                            HeatMap(heat_points, radius=25, blur=15, gradient={0.2: 'blue', 0.5: 'yellow', 1.0: 'red'}).add_to(m)
+                    else:
+                        st.warning("Falta la columna 'Espesor_Deposito_mm' en tu base de datos.")
+
+                # 2. Corrección: El menú de capas SIEMPRE se debe agregar al final de todo
+                folium.LayerControl().add_to(m)
+                        
+                st_folium(m, width="100%", height=550)
 
     # --- PESTAÑA 2: COMPOSICIÓN Y CARRUSEL ---
     with tab_comp:
