@@ -275,7 +275,7 @@ else:
                     
             st_folium(m, width="100%", height=550)
             
-        else:
+            else:
             # Creamos el mapa base 
             m = folium.Map(location=[centro_lat, centro_lon], zoom_start=11, tiles='CartoDB positron')
             
