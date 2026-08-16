@@ -113,10 +113,8 @@ else:
         st.subheader("Análisis Detallado por Muestra")
         muestra_sel = st.selectbox("Selecciona una muestra para ver su mineralogía:", df_filtrado['ID_Muestra'])
         
-        # Obtener los porcentajes de la muestra seleccionada
+        # Obtener los porcentajes
         datos_muestra_pct = df_pct_filtrado[df_pct_filtrado['ID_Muestra'] == muestra_sel][cols_conteo].iloc[0]
-        
-        # Filtrar componentes que sean mayores a 0 para que la gráfica no se sature
         datos_grafica = datos_muestra_pct[datos_muestra_pct > 0].reset_index()
         datos_grafica.columns = ['Componente', 'Porcentaje']
         datos_grafica = datos_grafica.sort_values(by='Porcentaje', ascending=False)
@@ -124,22 +122,34 @@ else:
         col_graf, col_foto = st.columns([2, 1])
         with col_graf:
             fig_pie = px.pie(
-                datos_grafica, 
-                names='Componente', 
-                values='Porcentaje',
-                hole=0.4,
-                title=f"Composición Porcentual - {muestra_sel}"
+                datos_grafica, names='Componente', values='Porcentaje',
+                hole=0.4, title=f"Composición Porcentual - {muestra_sel}"
             )
             fig_pie.update_traces(textposition='inside', textinfo='percent+label')
             st.plotly_chart(fig_pie, use_container_width=True)
             
         with col_foto:
-            # Mostrar foto si existe
+            # Mostrar foto con sistema antibloqueo de Google Drive
             datos_m_crudos = df_filtrado[df_filtrado['ID_Muestra'] == muestra_sel].iloc[0]
             if 'URLs_Fotos' in datos_m_crudos and pd.notna(datos_m_crudos['URLs_Fotos']):
-                url = str(datos_m_crudos['URLs_Fotos']).split(',')[0].strip()
-                if url:
-                    st.image(url, caption="Foto Macroscópica", use_container_width=True)
+                url_original = str(datos_m_crudos['URLs_Fotos']).split(',')[0].strip()
+                
+                if url_original:
+                    # TRUCO MÁGICO: Transformar el link si es de Google Drive
+                    if "drive.google.com" in url_original:
+                        import re
+                        # Extraer el ID de la foto
+                        match = re.search(r'id=([a-zA-Z0-9_-]+)', url_original)
+                        if match:
+                            id_foto = match.group(1)
+                            # Forzar el visualizador de miniaturas de Google (sz=w800 le da buena resolución)
+                            url_final = f"https://drive.google.com/thumbnail?id={id_foto}&sz=w800"
+                        else:
+                            url_final = url_original
+                    else:
+                        url_final = url_original
+                    
+                    st.image(url_final, caption="Foto Macroscópica", use_container_width=True)
             else:
                 st.info("Sin foto macroscópica.")
 
