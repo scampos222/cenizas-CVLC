@@ -120,6 +120,7 @@ def obtener_url_imagen(url_original):
 @st.cache_data(show_spinner="Descargando y optimizando base de datos...")
 def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     df_temp = None
+    
     if usar_sql:
         try:
             conn = st.connection("sql")
@@ -226,7 +227,6 @@ def renderizar_kpis(df_fil, cols_conteo):
         st.markdown("---")
     except Exception as e: st.error(f"⚠️ Error al renderizar KPIs: {e}")
 
-# --- SUB-ESTRUCTURACIÓN DEL MÓDULO ESPACIAL ---
 def renderizar_modulo_espacial(df_fil, archivo_geo):
     try:
         st.subheader("Análisis Geoespacial y Predictivo")
@@ -236,12 +236,8 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
         if df_mapa.empty: return st.warning("No hay datos con coordenadas válidas.")
         c_lat, c_lon = df_mapa['Latitud'].mean(), df_mapa['Longitud'].mean()
 
-        # Creación de sub-pestañas internas
         tab_base, tab_geo, tab_sim = st.tabs(["🗺️ Cartografía Base", "📐 Modelos (Isopacas/Isopletas)", "🤖 Simulaciones (IA/Tiempo)"])
         
-        # ------------------------------------
-        # 1. PESTAÑA: CARTOGRAFÍA BASE
-        # ------------------------------------
         with tab_base:
             tipo_mapa_base = st.radio("Capa a visualizar:", ["📍 Puntos (2D)", "🔥 Dispersión (2D)", "🌋 Vista 3D (Volumen)"], horizontal=True)
             
@@ -271,7 +267,6 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                     h_data = df_mapa.dropna(subset=['Espesor_Deposito_mm'])
                     if not h_data.empty:
                         HeatMap([[r['Latitud'], r['Longitud'], r['Espesor_Deposito_mm']*2] for _, r in h_data.iterrows()], radius=25, blur=15).add_to(m_base)
-                        # Agregar leyenda a la dispersión
                         min_v, max_v = float(h_data['Espesor_Deposito_mm'].min()), float(h_data['Espesor_Deposito_mm'].max())
                         colormap = cm.LinearColormap(colors=['blue', 'cyan', 'lime', 'yellow', 'red'], vmin=min_v, vmax=max_v)
                         colormap.caption = 'Intensidad de Dispersión (Espesor en mm)'
@@ -279,9 +274,6 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
 
                 st_folium(m_base, width="100%", height=600, key="mapa_base")
 
-        # ------------------------------------
-        # 2. PESTAÑA: MODELOS (GEOSTADÍSTICA)
-        # ------------------------------------
         with tab_geo:
             tipo_mapa_geo = st.radio("Modelo Matemático:", ["🎯 Isopacas (Espesor)", "🪨 Isopletas (Tamaño)"], horizontal=True)
             with st.expander("⚙️ Parámetros de Interpolación Geostadística"):
@@ -321,9 +313,6 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                 
                 st_folium(m_geo, width="100%", height=600, key="mapa_geo")
 
-        # ------------------------------------
-        # 3. PESTAÑA: SIMULACIONES (IA / TIEMPO)
-        # ------------------------------------
         with tab_sim:
             tipo_mapa_sim = st.radio("Motor de Simulación:", ["⏳ Time-Lapse (Animación Histórica)", "🤖 IA: Predicción (Random Forest)"], horizontal=True)
             
@@ -374,56 +363,6 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
 
     except Exception as e: st.error(f"⚠️ Error al renderizar el módulo espacial: {e}")
 
-def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_conteo):
-    try:
-        st.subheader("⚖️ Análisis Comparativo Multi-Muestra")
-        col_f1, col_f2 = st.columns(2)
-        with col_f1:
-            veredas_disponibles = sorted(df_fil['Vereda'].dropna().unique().tolist())
-            filtro_v = st.multiselect("Filtrar opciones por Vereda:", veredas_disponibles, default=[])
-        with col_f2:
-            if 'Fecha_Recoleccion' in df_fil.columns and not df_fil['Fecha_Recoleccion'].dropna().empty:
-                fechas_disponibles = sorted(df_fil['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d').dropna().unique().tolist(), reverse=True)
-                filtro_f = st.multiselect("Filtrar opciones por Fecha:", fechas_disponibles, default=[])
-            else: filtro_f = []
-
-        df_opciones = df_fil.copy()
-        if filtro_v: df_opciones = df_opciones[df_opciones['Vereda'].isin(filtro_v)]
-        if filtro_f and 'Fecha_Recoleccion' in df_opciones.columns:
-            df_opciones = df_opciones[df_opciones['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d').isin(filtro_f)]
-
-        muestras_disponibles = df_opciones['ID_Muestra'].tolist()
-        muestras_seleccionadas = st.multiselect("Seleccione las muestras a comparar:", muestras_disponibles, default=muestras_disponibles[:3] if len(muestras_disponibles) >= 3 else muestras_disponibles)
-
-        if not muestras_seleccionadas: return st.info("Seleccione al menos una muestra para iniciar la comparativa.")
-
-        st.markdown("---")
-        st.subheader("📊 Comparativa de Distribución Mineralógica")
-        df_comp_pct = df_pct_fil[df_pct_fil['ID_Muestra'].isin(muestras_seleccionadas)].copy()
-        df_melted = df_comp_pct.melt(id_vars=['ID_Muestra'], value_vars=cols_conteo, var_name='Componente', value_name='Porcentaje')
-        df_melted = df_melted[df_melted['Porcentaje'] > 0] 
-        
-        fig_bar = px.bar(df_melted, x="ID_Muestra", y="Porcentaje", color="Componente", text="Porcentaje", color_discrete_map=color_map_oficial, barmode="stack")
-        fig_bar.update_traces(texttemplate='%{text:.1f}%', textposition='inside')
-        fig_bar.update_layout(height=450)
-        st.plotly_chart(fig_bar, use_container_width=True)
-
-        st.markdown("---")
-        st.subheader("📏 Comparativa Físico-Espacial")
-        cols_fisicas = ['ID_Muestra', 'Vereda', 'Fecha_Recoleccion', 'Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'Distancia_Crater_km', 'Nivel_Riesgo']
-        df_fisico = df_fil[df_fil['ID_Muestra'].isin(muestras_seleccionadas)][[c for c in cols_fisicas if c in df_fil.columns]].copy()
-        if 'Fecha_Recoleccion' in df_fisico.columns: df_fisico['Fecha_Recoleccion'] = df_fisico['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d')
-        st.dataframe(df_fisico, hide_index=True, use_container_width=True)
-        
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_fisico.to_excel(writer, index=False, sheet_name='Datos_Fisicos_Geo')
-            df_comp_pct.to_excel(writer, index=False, sheet_name='Quimica_Porcentajes')
-            
-        st.download_button(label="📥 Descargar Comparativa Excel (.xlsx)", data=output.getvalue(), file_name="comparativa_cvlc.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-    except Exception as e: st.error(f"⚠️ Error renderizando el módulo comparativo: {e}")
-
 def generar_pdf_reporte(m_sel, vereda, fecha, espesor, tamano, riesgo, df_graf):
     pdf = FPDF()
     pdf.add_page()
@@ -447,10 +386,12 @@ def generar_pdf_reporte(m_sel, vereda, fecha, espesor, tamano, riesgo, df_graf):
         pdf.cell(200, 10, txt=f"- {comp_limpio}: {round(row['Porcentaje'], 2)}%", ln=True)
     
     pdf_output = pdf.output(dest='S').encode('latin-1', 'ignore')
-    return f'<a href="data:application/pdf;base64,{base64.b64encode(pdf_output).decode()}" download="Reporte_{m_sel}.pdf" class="button" style="text-decoration:none;background-color:#2980B9;color:white;padding:8px 12px;border-radius:5px;font-size:14px;font-weight:bold;">📥 Descargar Ficha Técnica (PDF)</a>'
+    b64 = base64.b64encode(pdf_output).decode()
+    return f'<a href="data:application/pdf;base64,{b64}" download="Reporte_{m_sel}.pdf" class="button" style="text-decoration:none;background-color:#2980B9;color:white;padding:8px 12px;border-radius:5px;font-size:14px;font-weight:bold;">📥 Descargar Ficha Técnica (PDF)</a>'
 
 def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, fotos_subidas):
     try:
+        # --- 1. COMPOSICIÓN INDIVIDUAL ---
         st.subheader("1. Caracterización Mineralógica Individual")
         lista = df_fil["ID_Muestra"].tolist()
         if "idx_muestra" not in st.session_state or st.session_state["idx_muestra"] >= len(lista): st.session_state["idx_muestra"] = 0
@@ -481,7 +422,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, fotos_subidas
             st.markdown(f"""
             <div style="background-color:#EBF5FB; padding:10px 14px; border-radius:8px; margin-top:10px; font-size: 13px; border-left: 5px solid #2980B9; color:#1C2833; white-space: nowrap; overflow-x: auto;">
                 📋 <b>Vereda:</b> {d_crudo.get('Vereda','N/A')} &nbsp;|&nbsp; 📅 <b>Fecha:</b> {f_val} &nbsp;|&nbsp; 📏 <b>Tamaño:</b> {d_crudo.get('Tamaño_Promedio_mm',0)} mm &nbsp;|&nbsp; 🔥 <b>Espesor:</b> {d_crudo.get('Espesor_Deposito_mm',0)} mm<br>
-                🚨 <b>Alerta:</b> {d_crudo.get('Nivel_Riesgo', 'N/A')} &nbsp;|&nbsp; 🧭 <b>Viento Histórico:</b> {d_crudo.get('Direccion_Viento', 'N/A')}
+                🚨 <b>Alerta:</b> {d_crudo.get('Nivel_Riesgo', 'N/A')} &nbsp;|&nbsp; 🧭 <b>Viento:</b> {d_crudo.get('Direccion_Viento', 'N/A')}
             </div>""", unsafe_allow_html=True)
             
             if PDF_DISPONIBLE:
@@ -540,8 +481,30 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, fotos_subidas
 
         st.markdown("---")
         
-        # --- 3. ESTADÍSTICA AVANZADA (DECAIMIENTO, VOLUMEN Y CORRELACIÓN) ---
-        st.subheader("3. Análisis de Decaimiento, Volumen Magmático y Correlación")
+        # --- 3. EVOLUCIÓN TEMPORAL (RESTAURADO) ---
+        st.subheader("3. Evolución Temporal (Cenizas y Tamaño)")
+        col_t1, col_t2 = st.columns(2)
+        with col_t1:
+            if 'Fecha_Recoleccion' in df_fil.columns and not df_fil['Fecha_Recoleccion'].dropna().empty:
+                df_a = df_pct_fil.copy(); df_a['Fecha'] = df_fil['Fecha_Recoleccion']
+                df_a = df_a.dropna(subset=['Fecha']).groupby('Fecha')[cols_conteo].mean().reset_index().melt(id_vars='Fecha', value_vars=cols_conteo, var_name='Componente', value_name='Porcentaje')
+                fig_a = px.area(df_a, x="Fecha", y="Porcentaje", color="Componente", color_discrete_map=color_map_oficial, title="Evolución Mineralógica")
+                fig_a.update_layout(yaxis=dict(range=[0, 100]), margin=dict(t=30, b=20, l=10, r=10))
+                st.plotly_chart(fig_a, use_container_width=True)
+            else: st.info("Requiere datos temporales para visualizar la evolución mineralógica.")
+            
+        with col_t2:
+            if 'Fecha_Recoleccion' in df_fil.columns and 'Tamaño_Promedio_mm' in df_fil.columns:
+                d_t = df_fil.dropna(subset=['Fecha_Recoleccion', 'Tamaño_Promedio_mm']).sort_values('Fecha_Recoleccion')
+                if not d_t.empty:
+                    fig_l = px.line(d_t, x="Fecha_Recoleccion", y="Tamaño_Promedio_mm", color="Vereda", markers=True, hover_name="ID_Muestra", color_discrete_sequence=colores_profesionales, title="Seguimiento de Tamaño de Grano")
+                    fig_l.update_traces(line=dict(width=3), marker=dict(size=8)); st.plotly_chart(fig_l, use_container_width=True)
+            else: st.info("Requiere datos para evolución de tamaño.")
+
+        st.markdown("---")
+        
+        # --- 4. ESTADÍSTICA AVANZADA (DECAIMIENTO, VOLUMEN Y CORRELACIÓN) ---
+        st.subheader("4. Análisis de Decaimiento, Volumen Magmático y Correlación")
         c_dec, c_cor = st.columns(2)
         
         with c_dec:
@@ -573,6 +536,56 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, fotos_subidas
                 st.plotly_chart(fig_corr, use_container_width=True)
 
     except Exception as e: st.error(f"⚠️ Error renderizando el módulo de laboratorio: {e}")
+
+def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_conteo):
+    try:
+        st.subheader("⚖️ Análisis Comparativo Multi-Muestra")
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            veredas_disponibles = sorted(df_fil['Vereda'].dropna().unique().tolist())
+            filtro_v = st.multiselect("Filtrar opciones por Vereda:", veredas_disponibles, default=[])
+        with col_f2:
+            if 'Fecha_Recoleccion' in df_fil.columns and not df_fil['Fecha_Recoleccion'].dropna().empty:
+                fechas_disponibles = sorted(df_fil['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d').dropna().unique().tolist(), reverse=True)
+                filtro_f = st.multiselect("Filtrar opciones por Fecha:", fechas_disponibles, default=[])
+            else: filtro_f = []
+
+        df_opciones = df_fil.copy()
+        if filtro_v: df_opciones = df_opciones[df_opciones['Vereda'].isin(filtro_v)]
+        if filtro_f and 'Fecha_Recoleccion' in df_opciones.columns:
+            df_opciones = df_opciones[df_opciones['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d').isin(filtro_f)]
+
+        muestras_disponibles = df_opciones['ID_Muestra'].tolist()
+        muestras_seleccionadas = st.multiselect("Seleccione las muestras a comparar:", muestras_disponibles, default=muestras_disponibles[:3] if len(muestras_disponibles) >= 3 else muestras_disponibles)
+
+        if not muestras_seleccionadas: return st.info("Seleccione al menos una muestra para iniciar la comparativa.")
+
+        st.markdown("---")
+        st.subheader("📊 Comparativa de Distribución Mineralógica")
+        df_comp_pct = df_pct_fil[df_pct_fil['ID_Muestra'].isin(muestras_seleccionadas)].copy()
+        df_melted = df_comp_pct.melt(id_vars=['ID_Muestra'], value_vars=cols_conteo, var_name='Componente', value_name='Porcentaje')
+        df_melted = df_melted[df_melted['Porcentaje'] > 0] 
+        
+        fig_bar = px.bar(df_melted, x="ID_Muestra", y="Porcentaje", color="Componente", text="Porcentaje", color_discrete_map=color_map_oficial, barmode="stack")
+        fig_bar.update_traces(texttemplate='%{text:.1f}%', textposition='inside')
+        fig_bar.update_layout(height=450)
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("📏 Comparativa Físico-Espacial")
+        cols_fisicas = ['ID_Muestra', 'Vereda', 'Fecha_Recoleccion', 'Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'Distancia_Crater_km', 'Nivel_Riesgo']
+        df_fisico = df_fil[df_fil['ID_Muestra'].isin(muestras_seleccionadas)][[c for c in cols_fisicas if c in df_fil.columns]].copy()
+        if 'Fecha_Recoleccion' in df_fisico.columns: df_fisico['Fecha_Recoleccion'] = df_fisico['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d')
+        st.dataframe(df_fisico, hide_index=True, use_container_width=True)
+        
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_fisico.to_excel(writer, index=False, sheet_name='Datos_Fisicos_Geo')
+            df_comp_pct.to_excel(writer, index=False, sheet_name='Quimica_Porcentajes')
+            
+        st.download_button(label="📥 Descargar Comparativa Excel (.xlsx)", data=output.getvalue(), file_name="comparativa_cvlc.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    except Exception as e: st.error(f"⚠️ Error renderizando el módulo comparativo: {e}")
 
 def renderizar_modulo_operativo(df_fil):
     try:
