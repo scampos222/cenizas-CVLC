@@ -6,9 +6,11 @@ from folium.plugins import MarkerCluster, HeatMap
 from streamlit_folium import st_folium
 import re
 import json
-import pydeck as pdk # NUEVA LIBRERÍA PARA MAPAS 3D
+import pydeck as pdk
 
+# ==========================================
 # 1. CONFIGURACIÓN INSTITUCIONAL
+# ==========================================
 st.set_page_config(page_title="AshViewer-CVLC", layout="wide")
 
 st.markdown("""
@@ -47,7 +49,6 @@ colores_profesionales = px.colors.qualitative.Pastel
 # ==========================================
 st.sidebar.title("Panel de Control")
 
-# --- DESPLEGABLE 1: CARGA DE ARCHIVOS ---
 with st.sidebar.expander("📂 Carga de Archivos", expanded=True):
     archivo_subido = st.file_uploader("Cargar Base de Datos (.xlsx / .csv)", type=["xlsx", "csv"])
     archivo_geojson = st.file_uploader("Cargar Capa Veredas (.geojson)", type=["geojson", "json"])
@@ -116,7 +117,6 @@ with st.sidebar.expander("📅 Filtros Temporales", expanded=False):
     if 'Fecha_Recoleccion' in df.columns and not df['Fecha_Recoleccion'].isnull().all():
         df['Anio'] = df['Fecha_Recoleccion'].dt.year
         df['Mes_Num'] = df['Fecha_Recoleccion'].dt.month
-
         dic_meses = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
         anios_disponibles = ["Todos los Años"] + sorted([int(a) for a in df['Anio'].dropna().unique()], reverse=True)
         anio_sel = st.selectbox("Año de Recolección:", anios_disponibles)
@@ -185,7 +185,7 @@ else:
         "Mapa de Distribución", "Análisis de Muestra", "Análisis Avanzado", "Seguimiento de Tamaño", "Verificación de Campo", "Base de Datos"
     ])
 
-   # --- PESTAÑA 1: MAPAS ESPACIALES (AHORA CON 3D Y RELIEVE) ---
+    # --- PESTAÑA 1: MAPAS ESPACIALES ---
     with tab_mapa:
         st.subheader("Distribución Espacial de Muestras y Depósitos")
         tipo_mapa = st.radio(
@@ -203,80 +203,32 @@ else:
             df_3d = df_filtrado.dropna(subset=['Latitud', 'Longitud', 'Espesor_Deposito_mm']).copy()
             
             if not df_3d.empty:
-                # Multiplicamos la elevación para que el pilar se vea claramente
                 df_3d['Elevacion_Visual'] = df_3d['Espesor_Deposito_mm'] * 150 
-                
                 capa_columnas = pdk.Layer(
                     'ColumnLayer',
                     data=df_3d,
                     get_position='[Longitud, Latitud]',
                     get_elevation='Elevacion_Visual',
                     elevation_scale=1,
-                    radius=150, # Grosor de los pilares
-                    get_fill_color='[200, 30, 30, 180]', # Rojo translúcido
+                    radius=150, 
+                    get_fill_color='[200, 30, 30, 180]', 
                     pickable=True,
                     auto_highlight=True,
                 )
-                
                 vista_inicial = pdk.ViewState(
-                    longitude=centro_lon,
-                    latitude=centro_lat,
-                    zoom=10.5,
-                    pitch=55, # Inclinación 3D
-                    bearing=20
+                    longitude=centro_lon, latitude=centro_lat, zoom=10.5, pitch=55, bearing=20
                 )
-                
                 mapa_3d = pdk.Deck(
                     layers=[capa_columnas],
                     initial_view_state=vista_inicial,
                     tooltip={"html": "<b>Muestra:</b> {ID_Muestra} <br/> <b>Vereda:</b> {Vereda} <br/> <b>Espesor real:</b> {Espesor_Deposito_mm} mm", "style": {"color": "white"}},
-                    map_style='dark' # CORRECCIÓN: Estilo gratuito que no requiere API Key
+                    map_style='dark'
                 )
-                
                 st.pydeck_chart(mapa_3d, use_container_width=True)
             else:
                 st.warning("No hay datos de 'Espesor_Deposito_mm' para construir el volumen 3D.")
         
         else:
-            # --- MAPAS 2D (PUNTOS Y CALOR) ---
-            m = folium.Map(location=[centro_lat, centro_lon], zoom_start=11, tiles='CartoDB positron')
-            
-            # NUEVO: CAPA DE RELIEVE TOPOGRÁFICO DE ESRI
-            folium.TileLayer(
-                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
-                attr='Esri',
-                name='Relieve Topográfico (Esri)',
-                overlay=False,
-                control=True
-            ).add_to(m)
-
-            # Control para encender o apagar el relieve en la esquina del mapa
-            folium.LayerControl().add_to(m)
-            
-            if archivo_geojson is not None:
-                geo_data = json.load(archivo_geojson)
-                folium.GeoJson(
-                    geo_data, name="Veredas",
-                    style_function=lambda feature: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5, 'fillOpacity': 0.15}
-                ).add_to(m)
-
-            if "Puntos" in tipo_mapa:
-                marker_cluster = MarkerCluster().add_to(m)
-                for idx, row in df_filtrado.iterrows():
-                    html_popup = f"<div style='width:200px; font-family:sans-serif;'><b>ID: {row.get('ID_Muestra', 'N/A')}</b><br><b>Vereda:</b> {row.get('Vereda', 'N/A')}<br><b>Espesor:</b> {row.get('Espesor_Deposito_mm', 'N/A')} mm</div>"
-                    folium.Marker(location=[row['Latitud'], row['Longitud']], popup=folium.Popup(html_popup, max_width=300), tooltip=str(row.get('ID_Muestra', 'Muestra')), icon=folium.Icon(color="darkblue", icon="info-sign")).add_to(marker_cluster)
-            elif "Calor" in tipo_mapa:
-                if 'Espesor_Deposito_mm' in df_filtrado.columns:
-                    heat_data = df_filtrado.dropna(subset=['Latitud', 'Longitud', 'Espesor_Deposito_mm'])
-                    heat_points = [[row['Latitud'], row['Longitud'], float(row['Espesor_Deposito_mm']) * 2] for index, row in heat_data.iterrows()]
-                    HeatMap(heat_points, radius=25, blur=15, gradient={0.2: 'blue', 0.5: 'yellow', 1.0: 'red'}).add_to(m)
-                else:
-                    st.warning("Falta la columna 'Espesor_Deposito_mm' en tu base de datos.")
-                    
-            st_folium(m, width="100%", height=550)
-            
-            else:
-            # Creamos el mapa base 
             m = folium.Map(location=[centro_lat, centro_lon], zoom_start=11, tiles='CartoDB positron')
             
             # --- CAPA 1: RELIEVE TOPOGRÁFICO DE ESRI ---
@@ -292,71 +244,24 @@ else:
             # 1. Pega tu enlace dentro de las comillas simples abajo
             url_servicio_arcgis = 'PEGA_AQUI_TU_ENLACE' 
             
-            # 2. Si el enlace termina en MapServer, podemos llamarlo por WMS añadiendo /WMSServer
             if url_servicio_arcgis != 'PEGA_AQUI_TU_ENLACE':
                 folium.raster_layers.WmsTileLayer(
                     url=f"{url_servicio_arcgis}/WMSServer",
-                    layers='0', # 0 suele ser el ID de la capa principal
+                    layers='0',
                     name='Mapa de Amenaza Oficial',
                     fmt='image/png',
                     transparent=True,
                     control=True
                 ).add_to(m)
 
-            # Control para encender o apagar las capas
             folium.LayerControl().add_to(m)
             
-            # --- AGREGAR GEOJSON DE VEREDAS ---
             if archivo_geojson is not None:
                 geo_data = json.load(archivo_geojson)
                 folium.GeoJson(
                     geo_data, name="Veredas",
                     style_function=lambda feature: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5, 'fillOpacity': 0.15}
                 ).add_to(m)
-
-            # --- AGREGAR LOS PUNTOS O EL MAPA DE CALOR ---
-            if "Puntos" in tipo_mapa:
-                marker_cluster = MarkerCluster().add_to(m)
-                for idx, row in df_filtrado.iterrows():
-                    html_popup = f"<div style='width:200px; font-family:sans-serif;'><b>ID: {row.get('ID_Muestra', 'N/A')}</b><br><b>Vereda:</b> {row.get('Vereda', 'N/A')}<br><b>Espesor:</b> {row.get('Espesor_Deposito_mm', 'N/A')} mm</div>"
-                    folium.Marker(location=[row['Latitud'], row['Longitud']], popup=folium.Popup(html_popup, max_width=300), tooltip=str(row.get('ID_Muestra', 'Muestra')), icon=folium.Icon(color="darkblue", icon="info-sign")).add_to(marker_cluster)
-            elif "Calor" in tipo_mapa:
-                if 'Espesor_Deposito_mm' in df_filtrado.columns:
-                    heat_data = df_filtrado.dropna(subset=['Latitud', 'Longitud', 'Espesor_Deposito_mm'])
-                    heat_points = [[row['Latitud'], row['Longitud'], float(row['Espesor_Deposito_mm']) * 2] for index, row in heat_data.iterrows()]
-                    HeatMap(heat_points, radius=25, blur=15, gradient={0.2: 'blue', 0.5: 'yellow', 1.0: 'red'}).add_to(m)
-                else:
-                    st.warning("Falta la columna 'Espesor_Deposito_mm' en tu base de datos.")
-                    
-            st_folium(m, width="100%", height=550)
-
-            # --- CONTROL DE CAPAS ---
-            # Esto añade un botón en la esquina superior derecha para encender/apagar el satélite o el mapa SGC
-            folium.LayerControl().add_to(m)
-
-            # --- AGREGAR GEOJSON DE VEREDAS ---
-            if archivo_geojson is not None:
-                geo_data = json.load(archivo_geojson)
-                folium.GeoJson(
-                    geo_data, name="Veredas",
-                    style_function=lambda feature: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5, 'fillOpacity': 0.15}
-                ).add_to(m)
-
-            # --- AGREGAR LOS PUNTOS O EL MAPA DE CALOR ---
-            if "Puntos" in tipo_mapa:
-                marker_cluster = MarkerCluster().add_to(m)
-                for idx, row in df_filtrado.iterrows():
-                    html_popup = f"<div style='width:200px; font-family:sans-serif;'><b>ID: {row.get('ID_Muestra', 'N/A')}</b><br><b>Vereda:</b> {row.get('Vereda', 'N/A')}<br><b>Espesor:</b> {row.get('Espesor_Deposito_mm', 'N/A')} mm</div>"
-                    folium.Marker(location=[row['Latitud'], row['Longitud']], popup=folium.Popup(html_popup, max_width=300), tooltip=str(row.get('ID_Muestra', 'Muestra')), icon=folium.Icon(color="darkblue", icon="info-sign")).add_to(marker_cluster)
-            elif "Calor" in tipo_mapa:
-                if 'Espesor_Deposito_mm' in df_filtrado.columns:
-                    heat_data = df_filtrado.dropna(subset=['Latitud', 'Longitud', 'Espesor_Deposito_mm'])
-                    heat_points = [[row['Latitud'], row['Longitud'], float(row['Espesor_Deposito_mm']) * 2] for index, row in heat_data.iterrows()]
-                    HeatMap(heat_points, radius=25, blur=15, gradient={0.2: 'blue', 0.5: 'yellow', 1.0: 'red'}).add_to(m)
-                else:
-                    st.warning("Falta la columna 'Espesor_Deposito_mm' en tu base de datos.")
-                    
-            st_folium(m, width="100%", height=550)
 
             if "Puntos" in tipo_mapa:
                 marker_cluster = MarkerCluster().add_to(m)
@@ -382,7 +287,6 @@ else:
         datos_grafica = datos_muestra_pct[datos_muestra_pct > 0].reset_index()
         datos_grafica.columns = ["Componente", "Porcentaje"]
 
-        # AQUÍ ESTÁ EL AJUSTE DE TAMAÑO (Proporción 1.3 vs 1)
         col_graf, col_foto = st.columns([1.3, 1])
         mineral_cliqueado = None
 
@@ -392,7 +296,6 @@ else:
                 color="Componente", color_discrete_map=color_map_oficial
             )
             fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-            # AQUÍ ESTÁ EL AJUSTE DE ALTURA (height=350)
             fig_pie.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, clickmode='event+select')
             
             eventos_grafica = st.plotly_chart(fig_pie, use_container_width=True, on_select="rerun", key=f"pie_{muestra_sel}")
@@ -434,7 +337,7 @@ else:
             else:
                 st.info("Sin registro fotográfico asociado.")
 
-   # --- PESTAÑA 3: ANÁLISIS AVANZADO ---
+    # --- PESTAÑA 3: ANÁLISIS AVANZADO ---
     with tab_analisis:
         st.subheader("⚖️ Comparativa de Distribución Mineralógica")
         comp_col1, comp_col2 = st.columns(2)
@@ -466,7 +369,6 @@ else:
         st.markdown("---")
 
         st.subheader("🔺 Clasificación Petrológica de Cenizas (V-L-C)")
-        
         cols_vidrio = [c for c in cols_conteo if 'FV' in c.upper() or 'VIDRIO' in c.upper()]
         cols_liticos = [c for c in cols_conteo if 'LV' in c.upper() or 'LÍTICO' in c.upper() or 'LITICO' in c.upper()]
         cols_cristales = [c for c in cols_conteo if c not in cols_vidrio + cols_liticos]
