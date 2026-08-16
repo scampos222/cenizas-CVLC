@@ -153,7 +153,6 @@ with st.sidebar.expander("📥 Exportar Datos", expanded=False):
 # --- FUNCIONES DE IMAGEN ---
 def obtener_url_imagen(url_original):
     url_limpia = str(url_original).strip()
-    # Si usamos el truco del nombre en el Excel (Nombre | Enlace)
     if "|" in url_limpia:
         url_limpia = url_limpia.split("|")[1].strip()
         
@@ -169,11 +168,9 @@ def obtener_nombre_foto(url_original):
     if not url_limpia or url_limpia.lower() == "nan":
         return "Foto de Muestra"
     
-    # Si el usuario puso el nombre en el Excel con una barra vertical
     if "|" in url_limpia:
         return url_limpia.split("|")[0].strip()
     
-    # Si es GitHub u otro link, extraemos el nombre del archivo sin extensión (.jpg)
     path = urlparse(url_limpia).path
     nombre_archivo = os.path.basename(unquote(path))
     nombre_sin_ext = os.path.splitext(nombre_archivo)[0]
@@ -208,8 +205,9 @@ else:
 
     st.markdown("---")
     
-    tab_mapa, tab_comp, tab_analisis, tab_tamano, tab_reportes, tab_datos = st.tabs([
-        "Mapa de Distribución", "Análisis de Muestra", "Análisis Avanzado", "Seguimiento de Tamaño", "Verificación de Campo", "Base de Datos"
+    # AHORA SON SOLO 4 PESTAÑAS PRINCIPALES
+    tab_mapa, tab_comp, tab_analisis, tab_tamano = st.tabs([
+        "Mapa de Distribución", "Análisis de Muestra", "Análisis Avanzado", "Seguimiento de Tamaño"
     ])
 
     # --- PESTAÑA 1: MAPAS ESPACIALES ---
@@ -317,12 +315,12 @@ else:
         col_m_prev, col_m_select, col_m_next = st.columns([1, 3, 1])
         
         with col_m_prev:
-            if st.button("⬅️", use_container_width=True):
+            if st.button("⬅️ Muestra Anterior", use_container_width=True):
                 st.session_state["idx_muestra_actual"] = (st.session_state["idx_muestra_actual"] - 1) % len(lista_muestras)
                 st.rerun()
 
         with col_m_next:
-            if st.button("➡️", use_container_width=True):
+            if st.button("Muestra Siguiente ➡️", use_container_width=True):
                 st.session_state["idx_muestra_actual"] = (st.session_state["idx_muestra_actual"] + 1) % len(lista_muestras)
                 st.rerun()
 
@@ -356,7 +354,6 @@ else:
             if eventos_grafica and "selection" in eventos_grafica and eventos_grafica["selection"]["points"]:
                 mineral_cliqueado = eventos_grafica["selection"]["points"][0]["label"]
 
-            # --- NUEVO: DETALLES MOVIDOS DEBAJO DE LA TORTA ---
             vereda_val = datos_m_crudos.get('Vereda', 'N/A')
             fecha_val = pd.to_datetime(datos_m_crudos['Fecha_Recoleccion']).strftime('%Y-%m-%d') if 'Fecha_Recoleccion' in datos_m_crudos and pd.notna(datos_m_crudos['Fecha_Recoleccion']) else 'N/A'
             tamano_val = f"{datos_m_crudos.get('Tamaño_Promedio_mm', 'N/A')} mm"
@@ -510,9 +507,12 @@ else:
             st.plotly_chart(fig_scatter, use_container_width=True)
         else:
             st.warning("No se encontró la columna 'Tamaño_Promedio_mm'.")
-            
-    # --- PESTAÑA 5: REPORTES DE CAMPO ---
-    with tab_reportes:
+
+    # ==========================================
+    # SECCIÓN DESPLEGABLE: DATOS CRUDOS Y REPORTES
+    # ==========================================
+    st.markdown("---")
+    with st.expander("➕ Mostrar Datos Crudos y Reportes de Campo"):
         st.subheader("Verificación Operativa")
         if 'Enlace_Reporte' in df_filtrado.columns:
             df_reportes = df_filtrado[['ID_Muestra', 'Vereda', 'Fecha_Recoleccion', 'Enlace_Reporte']].copy()
@@ -520,7 +520,6 @@ else:
         else:
             st.warning("Agregue la columna 'Enlace_Reporte' a su base de datos.")
 
-    # --- PESTAÑA 6: BASE DE DATOS ---
-    with tab_datos:
+        st.markdown("---")
         st.subheader("Consolidado de Datos")
         st.dataframe(df_filtrado, use_container_width=True)
