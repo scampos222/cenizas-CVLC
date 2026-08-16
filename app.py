@@ -150,10 +150,13 @@ with st.sidebar.expander("📥 Exportar Datos", expanded=False):
 
 def obtener_url_imagen(url_original):
     url_limpia = str(url_original).strip()
+    # Si es un enlace de Google Drive
     if "drive.google.com" in url_limpia:
         match = re.search(r'[-\w]{25,}', url_limpia)
         if match:
-            return f"https://drive.google.com/uc?id={match.group(0)}"
+            file_id = match.group(0)
+            # Usamos el enlace directo de descarga/visualización directa en alta resolución
+            return f"https://lh3.googleusercontent.com/d/{file_id}"
     return url_limpia
 
 # ==========================================
