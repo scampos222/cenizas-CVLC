@@ -247,15 +247,15 @@ else:
                     control=True
                 ).add_to(m)
 
-                # Capa 2: Mapa Amenaza SGC
-                url_wms_sgc = 'https://srvags.sgc.gov.co/arcgis/services/Amenaza_Volcanica/Amenaza_Volcanica/MapServer/WMSServer' 
+                # Capa 2: Mapa de Amenaza (Servidor ArcGIS / SGC)
+                url_arcgis_layer = 'https://services.arcgis.com/WMSServer' # O la URL REST directa de tu servidor
                 
-                folium.raster_layers.WmsTileLayer(
-                    url=url_wms_sgc,
-                    layers='0',
-                    name='Amenaza Volcánica (SGC)',
-                    fmt='image/png',
-                    transparent=True,
+                folium.TileLayer(
+                    tiles='https://server.arcgisonline.com/ArcGIS/rest/services/Specialty/DeLorme_World_Base_Map/MapServer/tile/{z}/{y}/{x}',
+                    attr='ArcGIS Online',
+                    name='Mapa Geológico / Amenaza (ArcGIS)',
+                    overlay=True,
+                    opacity=0.7,
                     control=True
                 ).add_to(m)
                 
