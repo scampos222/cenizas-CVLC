@@ -66,6 +66,9 @@ colores_profesionales = px.colors.qualitative.Pastel
 LAT_CRATER = 2.313377
 LON_CRATER = -76.395088
 
+# Rosa de los vientos oficial para forzar la gráfica
+DIRECCIONES_BRUJULA = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
+
 # ==========================================
 # 2. FUNCIONES MATEMÁTICAS, APIs Y AUXILIARES
 # ==========================================
@@ -97,7 +100,7 @@ def operaciones_geoespaciales_vectorizadas(lats, lons):
     initial_bearing = np.arctan2(x, y)
     azimuts = (np.degrees(initial_bearing) + 360) % 360
     
-    dirs = np.array(['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'])
+    dirs = np.array(DIRECCIONES_BRUJULA)
     ix = np.round(azimuts / (360. / len(dirs))).astype(int)
     direcciones = dirs[ix % len(dirs)]
     return distancias, direcciones, azimuts
@@ -114,7 +117,7 @@ def obtener_clima_crater_actual():
         r = requests.get(url, timeout=5)
         if r.status_code == 200:
             data = r.json()['current']
-            dirs = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
+            dirs = DIRECCIONES_BRUJULA
             ix = int(round(data['wind_direction_10m'] / (360. / len(dirs))))
             return data['wind_speed_10m'], dirs[ix % len(dirs)]
     except: return None, None
@@ -445,8 +448,12 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
             if st.button("➡️", use_container_width=True): st.session_state["idx_muestra"] = (st.session_state["idx_muestra"] + 1) % len(lista); st.rerun()
 
         d_crudo = df_fil[df_fil["ID_Muestra"] == m_sel].iloc[0]
+        
+        # 1. Gráfica Macro-Petrológica Principal
         d_pct = df_pct_fil[df_pct_fil["ID_Muestra"] == m_sel][cols_macro].iloc[0]
         d_graf = d_pct[d_pct > 0].reset_index(); d_graf.columns = ["Componente", "Porcentaje"]
+
+        # 2. Índice Magmático Félsico/Máfico
         d_ind = df_pct_fil[df_pct_fil["ID_Muestra"] == m_sel][cols_indice].iloc[0]
         d_ind_graf = d_ind[d_ind > 0].reset_index(); d_ind_graf.columns = ["Componente", "Porcentaje"]
 
@@ -500,7 +507,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
 
         st.markdown("---")
         
-        # --- 2. ROSA DE VIENTOS Y TERNARIO ---
+        # --- 2. ROSA DE VIENTOS Y TERNARIO (V-L-C EXACTO) ---
         st.subheader("2. Petrología Pura y Rosa de Dispersión Atmosférica")
         c1, c2 = st.columns(2)
         with c1:
@@ -519,9 +526,22 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
             v_vel, v_dir = obtener_clima_crater_actual()
             clima_txt = f"Viento Actual (Satélite): **{v_vel} km/h hacia el {v_dir}**" if v_vel else "Viento Actual (Satélite): No disponible"
             if 'Direccion_Viento' in df_fil.columns:
-                # SE CORRIGIÓ SUMA POR MAX PARA EVITAR EL "DEPÓSITO FANTASMA"
                 df_polar = df_fil.groupby('Direccion_Viento')['Espesor_Deposito_mm'].max().reset_index()
-                fig_p = px.bar_polar(df_polar, r="Espesor_Deposito_mm", theta="Direccion_Viento", color="Espesor_Deposito_mm", template="plotly_white", color_continuous_scale="Reds", title=f"Rosa de Dispersión Histórica (Espesor Máximo)<br><sup style='font-size:12px'>{clima_txt}</sup>")
+                
+                # --- SOLUCIÓN: FORZAR ORDEN CATEGÓRICO Y ROTACIÓN DE BRÚJULA GEOGRÁFICA ---
+                fig_p = px.bar_polar(
+                    df_polar, 
+                    r="Espesor_Deposito_mm", 
+                    theta="Direccion_Viento", 
+                    color="Espesor_Deposito_mm", 
+                    template="plotly_white", 
+                    color_continuous_scale="Reds", 
+                    title=f"Rosa de Dispersión Histórica (Espesor Máximo)<br><sup style='font-size:12px'>{clima_txt}</sup>",
+                    category_orders={"Direccion_Viento": DIRECCIONES_BRUJULA}
+                )
+                
+                # Rotar la gráfica para que N sea 0 grados (arriba) y el orden sea a las manecillas del reloj
+                fig_p.update_layout(polar=dict(angularaxis=dict(direction='clockwise', rotation=90)))
                 st.plotly_chart(fig_p, use_container_width=True)
 
         st.markdown("---")
