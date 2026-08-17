@@ -31,6 +31,12 @@ try:
 except ImportError:
     PDF_DISPONIBLE = False
 
+try:
+    from pykrige.ok import OrdinaryKriging
+    KRIGING_DISPONIBLE = True
+except ImportError:
+    KRIGING_DISPONIBLE = False
+
 # ==========================================
 # 1. CONFIGURACIÓN Y CONSTANTES
 # ==========================================
@@ -50,12 +56,10 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# Paleta de colores para los grupos macro petrológicos
-color_map_macro = {
-    "Vidrio": "#FF8C00", 
-    "Líticos": "#8B4513", 
-    "Cristales": "#9370DB", 
-    "Otros": "#A9A9A9"
+color_map_oficial = {
+    "LV1": "#555555", "LVA1": "#8B4513", "LVA2": "#A0522D", "LVA3": "#CD853F",
+    "Plagioclasa": "#D3D3D3", "Cuarzo": "#F5F5F5", "Piroxeno": "#2F4F4F", "Anfiboles": "#556B2F",
+    "FV1": "#FF8C00", "Epidotas": "#9ACD32", "Ox_Fe": "#8B0000", "Otros_Cristales": "#9370DB", "OTROS": "#FFD700"
 }
 colores_profesionales = px.colors.qualitative.Pastel
 
@@ -91,12 +95,12 @@ def operaciones_geoespaciales_vectorizadas(lats, lons):
     x = np.sin(dlon) * np.cos(lat2)
     y = np.cos(lat1) * np.sin(lat2) - (np.sin(lat1) * np.cos(lat2) * np.cos(dlon))
     initial_bearing = np.arctan2(x, y)
-    brng = (np.degrees(initial_bearing) + 360) % 360
+    azimuts = (np.degrees(initial_bearing) + 360) % 360
     
     dirs = np.array(['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'])
-    ix = np.round(brng / (360. / len(dirs))).astype(int)
+    ix = np.round(azimuts / (360. / len(dirs))).astype(int)
     direcciones = dirs[ix % len(dirs)]
-    return distancias, direcciones
+    return distancias, direcciones, azimuts
 
 def clasificar_riesgo_vectorizado(espesores):
     condiciones = [pd.isna(espesores) | (espesores == 0), espesores < 1, espesores <= 5, espesores > 5]
@@ -144,9 +148,8 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
                 if match: df_temp = pd.read_csv(f"https://docs.google.com/spreadsheets/d/{match.group(1)}/export?format=csv")
             except Exception: pass 
             
-    if df_temp is None or df_temp.empty: return pd.DataFrame(), pd.DataFrame(), [], []
+    if df_temp is None or df_temp.empty: return pd.DataFrame(), pd.DataFrame(), [], [], [], []
 
-    # 1. TRADUCTOR BLINDADO DE COLUMNAS
     rename_dict = {}
     for c in df_temp.columns:
         cu = str(c).strip().upper()
@@ -171,50 +174,67 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
         df_temp['Longitud'] = df_temp['Longitud'].apply(limpiar_coordenada)
         df_temp = df_temp.dropna(subset=['Latitud', 'Longitud'])
         
-        distancias, direcciones = operaciones_geoespaciales_vectorizadas(df_temp['Latitud'].values, df_temp['Longitud'].values)
+        distancias, direcciones, azimuts = operaciones_geoespaciales_vectorizadas(df_temp['Latitud'].values, df_temp['Longitud'].values)
         df_temp['Distancia_Crater_km'] = distancias
         df_temp['Direccion_Viento'] = direcciones
+        df_temp['Azimut_Crater'] = azimuts
         
     if 'Espesor_Deposito_mm' in df_temp.columns:
         df_temp['Nivel_Riesgo'] = clasificar_riesgo_vectorizado(df_temp['Espesor_Deposito_mm'])
 
     cols_info = ['ID_Muestra', 'Localizacion', 'Latitud', 'Longitud', 'Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 
                  'URLs_Fotos', 'URL_Microscopio', 'Fecha_Recoleccion', 'Enlace_Reporte', 'Direccion_Viento', 
-                 'Distancia_Crater_km', 'Nivel_Riesgo', 'Total_Granos_Excel']
+                 'Distancia_Crater_km', 'Azimut_Crater', 'Nivel_Riesgo', 'Total_Granos_Excel']
     
     cols_conteo = [col for col in df_temp.columns if col not in cols_info]
     for col in cols_conteo + ['Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'Distancia_Crater_km']:
         if col in df_temp.columns: df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce').fillna(0)
 
-    # 2. AGRUPACIÓN MACRO-PETROLÓGICA ESTRICTA
+    # 2. AGRUPACIÓN MACRO Y EVOLUCIÓN MAGMÁTICA
     c_v = [c for c in cols_conteo if 'FV' in c.upper() or 'VIDRIO' in c.upper()]
     c_l = [c for c in cols_conteo if 'LV' in c.upper() or 'LITICO' in c.upper() or 'LÍTICO' in c.upper()]
     c_otros = [c for c in cols_conteo if c.upper() == 'OTROS']
     c_c = [c for c in cols_conteo if c not in c_v + c_l + c_otros]
+    
+    # Índice Félsico vs Máfico
+    c_felsicos = [c for c in cols_conteo if c.upper() in ['PLAGIOCLASA', 'CUARZO']]
+    c_maficos = [c for c in cols_conteo if c.upper() in ['PIROXENO', 'ANFIBOLES', 'EPIDOTAS', 'OX_FE', 'OLIVINO']]
 
     df_temp['Vidrio'] = df_temp[c_v].sum(axis=1) if c_v else 0
     df_temp['Líticos'] = df_temp[c_l].sum(axis=1) if c_l else 0
     df_temp['Cristales'] = df_temp[c_c].sum(axis=1) if c_c else 0
     df_temp['Otros'] = df_temp[c_otros].sum(axis=1) if c_otros else 0
+    df_temp['Félsicos'] = df_temp[c_felsicos].sum(axis=1) if c_felsicos else 0
+    df_temp['Máficos'] = df_temp[c_maficos].sum(axis=1) if c_maficos else 0
     
     cols_macro = ['Vidrio', 'Líticos', 'Cristales', 'Otros']
+    cols_indice = ['Félsicos', 'Máficos']
     
     df_temp['Total_Granos_Calc'] = df_temp[cols_macro].sum(axis=1)
     
     df_pct_temp = df_temp.copy()
     if not df_temp[cols_macro].empty:
         df_pct_temp[cols_macro] = df_temp[cols_macro].div(df_temp['Total_Granos_Calc'].replace(0, 1), axis=0) * 100
+        df_pct_temp[cols_indice] = df_temp[cols_indice].div(df_temp[['Félsicos', 'Máficos']].sum(axis=1).replace(0, 1), axis=0) * 100
 
-    return df_temp, df_pct_temp, cols_conteo, cols_macro
+    return df_temp, df_pct_temp, cols_conteo, cols_macro, cols_indice
 
-@st.cache_data(show_spinner="Interpolando...")
+@st.cache_data(show_spinner="Interpolando con Matemática Espacial...")
 def calcular_modelo_espacial(lon, lat, z, metodo_interp, resolucion):
     margen_lon, margen_lat = (lon.max() - lon.min()) * 0.2 if lon.max() != lon.min() else 0.05, (lat.max() - lat.min()) * 0.2 if lat.max() != lat.min() else 0.05
     lim_lon_min, lim_lon_max = lon.min() - margen_lon, lon.max() + margen_lon
     lim_lat_min, lim_lat_max = lat.min() - margen_lat, lat.max() + margen_lat
+    
+    # Crear Malla de Alta Resolución
     grid_lon, grid_lat = np.mgrid[lim_lon_min:lim_lon_max:complex(0, resolucion), lim_lat_min:lim_lat_max:complex(0, resolucion)]
     
-    if "RBF" in metodo_interp:
+    if "Kriging" in metodo_interp and KRIGING_DISPONIBLE:
+        try:
+            OK = OrdinaryKriging(lon, lat, z, variogram_model='spherical', nlags=6)
+            z_krig, _ = OK.execute('grid', grid_lon[:,0], grid_lat[0,:])
+            grid_z = z_krig.T
+        except: grid_z = griddata((lon, lat), z, (grid_lon, grid_lat), method='linear')
+    elif "RBF" in metodo_interp:
         rbf_func = Rbf(lon, lat, z, function='multiquadric', smooth=0.1)
         grid_z = rbf_func(grid_lon, grid_lat)
     elif "Cúbica" in metodo_interp:
@@ -224,6 +244,24 @@ def calcular_modelo_espacial(lon, lat, z, metodo_interp, resolucion):
     
     grid_z = np.clip(grid_z, 0, z.max() * 1.2)
     return grid_lon, grid_lat, grid_z, lim_lon_min, lim_lon_max, lim_lat_min, lim_lat_max
+
+def calcular_volumen_integracion_2d(grid_lon, grid_lat, grid_z, c_lat):
+    """Integración Numérica 2D: Multiplica el área de cada celda de la grilla por su espesor para hallar el volumen exacto"""
+    d_lon = abs(grid_lon[1,0] - grid_lon[0,0])
+    d_lat = abs(grid_lat[0,1] - grid_lat[0,0])
+    # Conversión grados a km cuadrados (aprox)
+    area_celda_km2 = (d_lon * 111.32) * (d_lat * 111.32 * math.cos(math.radians(c_lat)))
+    # Sumar celdas con ceniza (>0.1mm). Espesor z está en mm (pasar a km = 1e-6)
+    volumen_km3 = np.sum(grid_z[grid_z > 0.1] * 1e-6 * area_celda_km2)
+    
+    if volumen_km3 < 0.0001: vei = 1
+    elif volumen_km3 < 0.001: vei = 2
+    elif volumen_km3 < 0.01: vei = 3
+    elif volumen_km3 < 0.1: vei = 4
+    elif volumen_km3 < 1: vei = 5
+    else: vei = "6+"
+    
+    return volumen_km3, vei
 
 # ==========================================
 # 4. MÓDULOS MACRO-PESTAÑAS
@@ -289,8 +327,9 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
         with tab_geo:
             tipo_mapa_geo = st.radio("Modelo Matemático:", ["🎯 Isopacas (Espesor)", "🪨 Isopletas (Tamaño)"], horizontal=True)
             with st.expander("⚙️ Parámetros de Interpolación Geostadística"):
-                metodo_interp = st.selectbox("Algoritmo Matemático", ["RBF (Función Base Radial - Recomendado)", "Cúbica (Griddata)", "Lineal (Griddata)"])
-                resolucion = st.slider("Resolución de Malla (Grid)", min_value=100, max_value=500, value=250, step=50)
+                algos = ["RBF (Función Base Radial)", "Kriging Ordinario (Mejor Precisión)", "Cúbica (Griddata)", "Lineal (Griddata)"] if KRIGING_DISPONIBLE else ["RBF (Función Base Radial - Recomendado)", "Cúbica (Griddata)", "Lineal (Griddata)"]
+                metodo_interp = st.selectbox("Algoritmo Matemático", algos, key="geo_algo")
+                resolucion = st.slider("Resolución de Malla (Grid)", min_value=100, max_value=500, value=250, step=50, key="geo_res")
             
             col_obj = 'Espesor_Deposito_mm' if "Isopacas" in tipo_mapa_geo else 'Tamaño_Promedio_mm'
             df_mod = df_mapa.dropna(subset=['Latitud', 'Longitud', col_obj]).copy()
@@ -301,6 +340,11 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                 lon, lat, z = df_mod['Longitud'].values, df_mod['Latitud'].values, df_mod[col_obj].values
                 grid_lon, grid_lat, grid_z, l_lon_min, l_lon_max, l_lat_min, l_lat_max = calcular_modelo_espacial(lon, lat, z, metodo_interp, resolucion)
                 
+                # Integración de Volumen (Solo para Isopacas)
+                if "Isopacas" in tipo_mapa_geo:
+                    vol_km3, vei = calcular_volumen_integracion_2d(grid_lon, grid_lat, grid_z, c_lat)
+                    st.success(f"🌋 **Cálculo de Volumen (Integración Numérica 2D):** Emisión total aproximada: **{vol_km3:.6f} km³** | Nivel VEI Estimado: **{vei}**")
+
                 fig = plt.figure(frameon=False)
                 ax = fig.add_axes([0, 0, 1, 1])
                 ax.axis('off'); ax.set_xlim(l_lon_min, l_lon_max); ax.set_ylim(l_lat_min, l_lat_max)
@@ -325,7 +369,7 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                 st_folium(m_geo, width="100%", height=600, key="mapa_geo")
 
         with tab_sim:
-            tipo_mapa_sim = st.radio("Motor de Simulación:", ["⏳ Time-Lapse (Animación Histórica)", "🤖 IA: Predicción (Random Forest)"], horizontal=True)
+            tipo_mapa_sim = st.radio("Motor de Simulación:", ["⏳ Time-Lapse (Animación Histórica)", "🤖 IA: Predicción (Machine Learning Vectorial)"], horizontal=True)
             if "Time-Lapse" in tipo_mapa_sim:
                 df_time = df_mapa.dropna(subset=['Fecha_Recoleccion', 'Espesor_Deposito_mm']).copy()
                 if df_time.empty: st.warning("No hay datos de fecha para animar.")
@@ -339,10 +383,13 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
             elif "IA: Predicción" in tipo_mapa_sim:
                 if not ML_DISPONIBLE: st.error("⚠️ La librería scikit-learn no está instalada.")
                 else:
-                    df_ml = df_mapa.dropna(subset=['Espesor_Deposito_mm', 'Distancia_Crater_km']).copy()
+                    df_ml = df_mapa.dropna(subset=['Espesor_Deposito_mm', 'Distancia_Crater_km', 'Azimut_Crater']).copy()
                     if len(df_ml) < 4: st.warning("Se requieren al menos 4 muestras para entrenar.")
                     else:
-                        X = df_ml[['Latitud', 'Longitud', 'Distancia_Crater_km']]
+                        st.info("🧠 **Red Neuronal / Random Forest Vectorial:** La IA simula el espesor reconociendo la distancia al cráter y el Azimut (dirección del viento) de tus datos históricos.")
+                        
+                        # INYECCIÓN DEL AZIMUT EN LA IA PARA QUE "ENTIENDA" EL VIENTO
+                        X = df_ml[['Distancia_Crater_km', 'Azimut_Crater']]
                         y = df_ml['Espesor_Deposito_mm']
                         modelo_rf = RandomForestRegressor(n_estimators=100, random_state=42)
                         modelo_rf.fit(X, y)
@@ -350,8 +397,9 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                         lon_min, lon_max = df_ml['Longitud'].min() - 0.05, df_ml['Longitud'].max() + 0.05
                         lat_min, lat_max = df_ml['Latitud'].min() - 0.05, df_ml['Latitud'].max() + 0.05
                         grid_lon, grid_lat = np.mgrid[lon_min:lon_max:100j, lat_min:lat_max:100j]
-                        distancias_grid, _ = operaciones_geoespaciales_vectorizadas(grid_lat.flatten(), grid_lon.flatten())
-                        X_pred = pd.DataFrame({'Latitud': grid_lat.flatten(), 'Longitud': grid_lon.flatten(), 'Distancia_Crater_km': distancias_grid})
+                        distancias_grid, _, azimuts_grid = operaciones_geoespaciales_vectorizadas(grid_lat.flatten(), grid_lon.flatten())
+                        
+                        X_pred = pd.DataFrame({'Distancia_Crater_km': distancias_grid, 'Azimut_Crater': azimuts_grid})
                         
                         predicciones = modelo_rf.predict(X_pred)
                         grid_z_rf = predicciones.reshape(grid_lon.shape)
@@ -389,7 +437,7 @@ def generar_pdf_reporte(m_sel, localizacion, fecha, espesor, tamano, riesgo, df_
     pdf_output = pdf.output(dest='S').encode('latin-1', 'ignore')
     return f'<a href="data:application/pdf;base64,{base64.b64encode(pdf_output).decode()}" download="Reporte_{m_sel}.pdf" class="button" style="text-decoration:none;background-color:#2980B9;color:white;padding:8px 12px;border-radius:5px;font-size:14px;font-weight:bold;">📥 Descargar Ficha Técnica (PDF)</a>'
 
-def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, fotos_subidas):
+def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, cols_indice, fotos_subidas):
     try:
         st.subheader("1. Caracterización Mineralógica Individual (Macro-Petrología)")
         lista = df_fil["ID_Muestra"].tolist()
@@ -405,16 +453,28 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, f
             if st.button("➡️", use_container_width=True): st.session_state["idx_muestra"] = (st.session_state["idx_muestra"] + 1) % len(lista); st.rerun()
 
         d_crudo = df_fil[df_fil["ID_Muestra"] == m_sel].iloc[0]
-        # Mostrar el gráfico Torta usando solo las MACRO categorías para evitar ruido visual
+        
+        # 1. Gráfica Macro-Petrológica Principal
         d_pct = df_pct_fil[df_pct_fil["ID_Muestra"] == m_sel][cols_macro].iloc[0]
         d_graf = d_pct[d_pct > 0].reset_index(); d_graf.columns = ["Componente", "Porcentaje"]
 
+        # 2. Índice Magmático Félsico/Máfico
+        d_ind = df_pct_fil[df_pct_fil["ID_Muestra"] == m_sel][cols_indice].iloc[0]
+        d_ind_graf = d_ind[d_ind > 0].reset_index(); d_ind_graf.columns = ["Componente", "Porcentaje"]
+
         col_g, col_f = st.columns([1.3, 1])
         with col_g:
-            fig = px.pie(d_graf, names="Componente", values="Porcentaje", hole=0.35, color="Componente", color_discrete_map=color_map_macro)
-            fig.update_traces(textposition="inside", textinfo="percent+label")
-            fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350)
-            st.plotly_chart(fig, use_container_width=True)
+            c_g1, c_g2 = st.columns(2)
+            with c_g1:
+                fig = px.pie(d_graf, names="Componente", values="Porcentaje", hole=0.35, color="Componente", color_discrete_map={"Vidrio": "#FF8C00", "Líticos": "#8B4513", "Cristales": "#9370DB", "Otros": "#A9A9A9"})
+                fig.update_traces(textposition="inside", textinfo="percent+label")
+                fig.update_layout(margin=dict(t=20, b=20, l=0, r=0), height=300, showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+            with c_g2:
+                if not d_ind_graf.empty:
+                    fig2 = px.bar(d_ind_graf, x="Componente", y="Porcentaje", color="Componente", title="Índice Magmático", color_discrete_map={"Félsicos": "#F5F5F5", "Máficos": "#2F4F4F"})
+                    fig2.update_layout(margin=dict(t=30, b=20, l=0, r=0), height=300, showlegend=False)
+                    st.plotly_chart(fig2, use_container_width=True)
 
             f_val = pd.to_datetime(d_crudo['Fecha_Recoleccion']).strftime('%Y-%m-%d') if pd.notna(d_crudo.get('Fecha_Recoleccion')) else 'N/A'
             st.markdown(f"""
@@ -454,18 +514,17 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, f
         st.markdown("---")
         
         # --- 2. ROSA DE VIENTOS Y TERNARIO (V-L-C EXACTO) ---
-        st.subheader("2. Petrología y Rosa de Dispersión Atmosférica")
+        st.subheader("2. Petrología Pura y Rosa de Dispersión Atmosférica")
         c1, c2 = st.columns(2)
         with c1:
             df_tp = df_fil.copy()
-            # El ternario se calcula EXCLUSIVAMENTE con V, L y C (excluyendo "Otros" intencionalmente)
             df_tp['Suma_VLC'] = df_tp['Vidrio'] + df_tp['Líticos'] + df_tp['Cristales']
             df_tp = df_tp[df_tp['Suma_VLC'] > 0]
             if not df_tp.empty:
                 df_tp['V%'] = (df_tp['Vidrio'] / df_tp['Suma_VLC']) * 100
                 df_tp['L%'] = (df_tp['Líticos'] / df_tp['Suma_VLC']) * 100
                 df_tp['C%'] = (df_tp['Cristales'] / df_tp['Suma_VLC']) * 100
-                fig_t = px.scatter_ternary(df_tp, a='V%', b='L%', c='C%', color="Nivel_Riesgo", hover_name="ID_Muestra", size="Tamaño_Promedio_mm", title="Clasificación Petrológica (100% Magmático Puro)")
+                fig_t = px.scatter_ternary(df_tp, a='V%', b='L%', c='C%', color="Nivel_Riesgo", hover_name="ID_Muestra", size="Tamaño_Promedio_mm", title="Clasificación Petrológica (100% Magmático)")
                 fig_t.update_layout(ternary=dict(aaxis_title='Vidrio %', baxis_title='Líticos %', caxis_title='Cristales %'), margin=dict(t=40,b=40,l=40,r=40))
                 st.plotly_chart(fig_t, use_container_width=True)
 
@@ -474,7 +533,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, f
             clima_txt = f"Viento Actual (Satélite): **{v_vel} km/h hacia el {v_dir}**" if v_vel else "Viento Actual (Satélite): No disponible"
             if 'Direccion_Viento' in df_fil.columns:
                 df_polar = df_fil.groupby('Direccion_Viento')['Espesor_Deposito_mm'].sum().reset_index()
-                fig_p = px.bar_polar(df_polar, r="Espesor_Deposito_mm", theta="Direccion_Viento", color="Espesor_Deposito_mm", template="plotly_white", color_continuous_scale="Reds", title=f"Rosa de Dispersión<br><sup style='font-size:12px'>{clima_txt}</sup>")
+                fig_p = px.bar_polar(df_polar, r="Espesor_Deposito_mm", theta="Direccion_Viento", color="Espesor_Deposito_mm", template="plotly_white", color_continuous_scale="Reds", title=f"Rosa de Dispersión Histórica<br><sup style='font-size:12px'>{clima_txt}</sup>")
                 st.plotly_chart(fig_p, use_container_width=True)
 
         st.markdown("---")
@@ -485,14 +544,10 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, f
         if 'Fecha_Recoleccion' in df_fil.columns and not df_fil['Fecha_Recoleccion'].dropna().empty:
             meses_disp = sorted(df_fil['Fecha_Recoleccion'].dt.month.dropna().unique())
             mes_dict = {1:'Enero', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
+            meses_sel = st.multiselect("Filtrar por Mes (Aplica solo a seguimiento temporal):", meses_disp, default=meses_disp, format_func=lambda x: mes_dict.get(x, str(x)))
             
-            meses_sel = st.multiselect("Filtrar por Mes (Aplica solo a seguimiento temporal y espacial):", meses_disp, default=meses_disp, format_func=lambda x: mes_dict.get(x, str(x)))
-            
-            # Filtro temporal estricto (por mes seleccionado)
             df_track = df_fil[df_fil['Fecha_Recoleccion'].dt.month.isin(meses_sel)].copy()
             df_pct_track = df_pct_fil[df_fil['Fecha_Recoleccion'].dt.month.isin(meses_sel)].copy()
-            
-            # CRUCIAL: Ordenar matemáticamente por fecha para no distorsionar las líneas
             df_track = df_track.sort_values('Fecha_Recoleccion')
             
             col_t1, col_t2 = st.columns(2)
@@ -502,7 +557,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, f
                     df_a['Fecha'] = df_track['Fecha_Recoleccion']
                     df_a = df_a.sort_values('Fecha').groupby('Fecha', as_index=False)[cols_macro].mean()
                     df_a = df_a.melt(id_vars='Fecha', value_vars=cols_macro, var_name='Componente', value_name='Porcentaje')
-                    fig_a = px.area(df_a, x="Fecha", y="Porcentaje", color="Componente", color_discrete_map=color_map_macro, title="Evolución Mineralógica Macro")
+                    fig_a = px.area(df_a, x="Fecha", y="Porcentaje", color="Componente", color_discrete_map={"Vidrio": "#FF8C00", "Líticos": "#8B4513", "Cristales": "#9370DB", "Otros": "#A9A9A9"}, title="Evolución Mineralógica Macro")
                     fig_a.update_layout(yaxis=dict(range=[0, 100]), margin=dict(t=30, b=20, l=10, r=10))
                     st.plotly_chart(fig_a, use_container_width=True)
                 
@@ -514,31 +569,15 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, f
             st.markdown("---")
             
             # --- 4. RELACIONES ESPACIALES Y ESTADÍSTICAS ---
-            st.subheader("4. Análisis de Decaimiento, Volumen Magmático y Correlación")
+            st.subheader("4. Análisis Espacial y Correlación")
             c_dec, c_cor = st.columns(2)
             
             with c_dec:
                 if 'Distancia_Crater_km' in df_track.columns and 'Espesor_Deposito_mm' in df_track.columns:
-                    df_vol = df_track.dropna(subset=['Distancia_Crater_km', 'Espesor_Deposito_mm'])
-                    df_vol = df_vol[df_vol['Espesor_Deposito_mm'] > 0]
-                    if len(df_vol) > 3:
-                        try:
-                            x_val = df_vol['Distancia_Crater_km'].values
-                            y_val = df_vol['Espesor_Deposito_mm'].values / 1e6 
-                            slope, intercept = np.polyfit(x_val, np.log(y_val), 1)
-                            k = -slope
-                            y0 = np.exp(intercept)
-                            if k > 0:
-                                vol_km3 = (2 * np.pi * y0) / (k**2)
-                                vei = 1 if vol_km3 < 0.0001 else 2 if vol_km3 < 0.001 else 3 if vol_km3 < 0.01 else 4 if vol_km3 < 0.1 else 5 if vol_km3 < 1 else "6+"
-                                st.success(f"🌋 **Estimación Magmática (Modelo Exponencial):** Volumen: **~{vol_km3:.6f} km³** | VEI Estimado: **{vei}**")
-                        except: pass
-                    
-                    fig_decay = px.scatter(df_track, x="Distancia_Crater_km", y="Espesor_Deposito_mm", color="Localizacion", size="Tamaño_Promedio_mm", hover_name="ID_Muestra", title="Decaimiento del Espesor vs. Distancia")
+                    fig_decay = px.scatter(df_track, x="Distancia_Crater_km", y="Espesor_Deposito_mm", color="Localizacion", size="Tamaño_Promedio_mm", hover_name="ID_Muestra", title="Decaimiento Espacial (Espesor vs. Distancia)")
                     st.plotly_chart(fig_decay, use_container_width=True)
 
             with c_cor:
-                # Usamos las variables Macro para la correlación para que sea limpia
                 cols_to_corr = cols_macro + ['Espesor_Deposito_mm', 'Tamaño_Promedio_mm', 'Distancia_Crater_km']
                 cols_to_corr = [c for c in cols_to_corr if c in df_track.columns]
                 if len(cols_to_corr) > 1:
@@ -547,7 +586,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, f
                     st.plotly_chart(fig_corr, use_container_width=True)
 
         else:
-            st.info("⚠️ Requiere columna de fecha válida para mostrar la evolución temporal y el decaimiento filtrado.")
+            st.info("⚠️ Requiere columna de fecha válida para mostrar la evolución temporal.")
 
     except Exception as e: st.error(f"⚠️ Error renderizando el módulo de laboratorio: {e}")
 
@@ -578,11 +617,10 @@ def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo):
         st.subheader("📊 Comparativa de Distribución Macro-Mineralógica")
         df_comp_pct = df_pct_fil[df_pct_fil['ID_Muestra'].isin(muestras_seleccionadas)].copy()
         
-        # Comparamos macro grupos
         df_melted = df_comp_pct.melt(id_vars=['ID_Muestra'], value_vars=cols_macro, var_name='Componente', value_name='Porcentaje')
         df_melted = df_melted[df_melted['Porcentaje'] > 0] 
         
-        fig_bar = px.bar(df_melted, x="ID_Muestra", y="Porcentaje", color="Componente", text="Porcentaje", color_discrete_map=color_map_macro, barmode="stack")
+        fig_bar = px.bar(df_melted, x="ID_Muestra", y="Porcentaje", color="Componente", text="Porcentaje", color_discrete_map={"Vidrio": "#FF8C00", "Líticos": "#8B4513", "Cristales": "#9370DB", "Otros": "#A9A9A9"}, barmode="stack")
         fig_bar.update_traces(texttemplate='%{text:.1f}%', textposition='inside')
         fig_bar.update_layout(height=450)
         st.plotly_chart(fig_bar, use_container_width=True)
@@ -612,7 +650,6 @@ def renderizar_modulo_operativo(df_fil):
         esp_cero = df_fil[df_fil['Espesor_Deposito_mm'] <= 0]
         if not esp_cero.empty: errores.append(f"{len(esp_cero)} muestras tienen espesor 0 o negativo.")
         
-        # Validar si el total de la suma de columnas de minerales da mayor a 0
         if 'Total_Granos_Calc' in df_fil.columns:
             sin_minerales = df_fil[df_fil['Total_Granos_Calc'] == 0]
             if not sin_minerales.empty: errores.append(f"{len(sin_minerales)} muestras sin conteo mineralógico válido.")
@@ -637,8 +674,7 @@ def renderizar_modulo_operativo(df_fil):
         else: st.dataframe(df_mostrar, hide_index=True, use_container_width=True)
         
         st.markdown("---"); st.subheader("Base de Datos Estructural (Cruda Original)")
-        # Quita columnas internas de control para mostrar la cruda
-        cols_excluir = ['Vidrio', 'Líticos', 'Cristales', 'Otros', 'Total_Granos_Calc']
+        cols_excluir = ['Vidrio', 'Líticos', 'Cristales', 'Otros', 'Félsicos', 'Máficos', 'Total_Granos_Calc']
         cols_mostrar_crudo = [c for c in df_fil.columns if c not in cols_excluir]
         st.dataframe(df_fil[cols_mostrar_crudo], use_container_width=True)
     except Exception as e: st.error(f"⚠️ Error cargando el módulo operativo: {e}")
@@ -657,7 +693,7 @@ with st.sidebar.expander("📂 Carga de Datos y Nube", expanded=not usar_sql):
     a_geo = st.file_uploader("Capa Veredas (.geojson)", type=["geojson", "json"])
     fotos_subidas = st.file_uploader("📷 Subir Fotos Locales (Multiselección)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
-df_bruto, df_pct_bruto, c_conteo, c_macro = cargar_y_limpiar_datos(a_sub, url_gs, usar_sql)
+df_bruto, df_pct_bruto, c_conteo, c_macro, c_indice = cargar_y_limpiar_datos(a_sub, url_gs, usar_sql)
 
 if df_bruto.empty:
     st.error("No se detectaron datos válidos.")
@@ -679,7 +715,6 @@ with st.sidebar.expander("📅 Filtros Temporales Generales"):
         df_bruto['Mes'] = df_bruto['Fecha_Recoleccion'].dt.month
         a_sel = st.selectbox("Año:", ["Todos"] + sorted(df_bruto['Anio'].dropna().unique(), reverse=True))
         
-        # Filtro Global Multiselección
         meses_unicos = sorted(df_bruto[df_bruto['Anio']==a_sel]['Mes'].dropna().unique() if a_sel != "Todos" else range(1,13))
         m_sel = st.multiselect("Meses (Aplica a mapas):", meses_unicos, default=meses_unicos)
         
@@ -695,12 +730,12 @@ else:
     
     t_espacial, t_laboratorio, t_comparativo, t_operativo = st.tabs([
         "🌍 Módulo Espacial (Mapas)", 
-        "🔬 Módulo de Laboratorio (IA y Química)", 
-        "⚖️ Módulo Comparativo (Multi-Muestra)",
+        "🔬 Módulo de Laboratorio (Petrología)", 
+        "⚖️ Módulo Comparativo",
         "🗃️ Módulo Operativo (QA/QC)"
     ])
     
     with t_espacial: renderizar_modulo_espacial(df_fil, a_geo)
-    with t_laboratorio: renderizar_modulo_laboratorio(df_fil, df_pct_fil, c_conteo, c_macro, fotos_subidas)
+    with t_laboratorio: renderizar_modulo_laboratorio(df_fil, df_pct_fil, c_conteo, c_macro, c_indice, fotos_subidas)
     with t_comparativo: renderizar_modulo_comparativo(df_fil, df_pct_fil, c_macro, c_conteo)
     with t_operativo: renderizar_modulo_operativo(df_fil)
