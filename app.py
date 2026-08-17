@@ -148,6 +148,7 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
                 if match: df_temp = pd.read_csv(f"https://docs.google.com/spreadsheets/d/{match.group(1)}/export?format=csv")
             except Exception: pass 
             
+    # SE ELIMINARON LAS MUESTRAS DE PRUEBA (DATOS FALSOS) AQUÍ
     if df_temp is None or df_temp.empty: return pd.DataFrame(), pd.DataFrame(), [], [], [], []
 
     rename_dict = {}
