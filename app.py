@@ -148,7 +148,6 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
                 if match: df_temp = pd.read_csv(f"https://docs.google.com/spreadsheets/d/{match.group(1)}/export?format=csv")
             except Exception: pass 
             
-    # SE ELIMINARON LAS MUESTRAS DE PRUEBA (DATOS FALSOS) AQUÍ
     if df_temp is None or df_temp.empty: return pd.DataFrame(), pd.DataFrame(), [], [], [], []
 
     rename_dict = {}
@@ -197,7 +196,6 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     c_otros = [c for c in cols_conteo if c.upper() == 'OTROS']
     c_c = [c for c in cols_conteo if c not in c_v + c_l + c_otros]
     
-    # Índice Félsico vs Máfico
     c_felsicos = [c for c in cols_conteo if c.upper() in ['PLAGIOCLASA', 'CUARZO']]
     c_maficos = [c for c in cols_conteo if c.upper() in ['PIROXENO', 'ANFIBOLES', 'EPIDOTAS', 'OX_FE', 'OLIVINO']]
 
@@ -226,7 +224,6 @@ def calcular_modelo_espacial(lon, lat, z, metodo_interp, resolucion):
     lim_lon_min, lim_lon_max = lon.min() - margen_lon, lon.max() + margen_lon
     lim_lat_min, lim_lat_max = lat.min() - margen_lat, lat.max() + margen_lat
     
-    # Crear Malla de Alta Resolución
     grid_lon, grid_lat = np.mgrid[lim_lon_min:lim_lon_max:complex(0, resolucion), lim_lat_min:lim_lat_max:complex(0, resolucion)]
     
     if "Kriging" in metodo_interp and KRIGING_DISPONIBLE:
@@ -247,12 +244,9 @@ def calcular_modelo_espacial(lon, lat, z, metodo_interp, resolucion):
     return grid_lon, grid_lat, grid_z, lim_lon_min, lim_lon_max, lim_lat_min, lim_lat_max
 
 def calcular_volumen_integracion_2d(grid_lon, grid_lat, grid_z, c_lat):
-    """Integración Numérica 2D: Multiplica el área de cada celda de la grilla por su espesor para hallar el volumen exacto"""
     d_lon = abs(grid_lon[1,0] - grid_lon[0,0])
     d_lat = abs(grid_lat[0,1] - grid_lat[0,0])
-    # Conversión grados a km cuadrados (aprox)
     area_celda_km2 = (d_lon * 111.32) * (d_lat * 111.32 * math.cos(math.radians(c_lat)))
-    # Sumar celdas con ceniza (>0.1mm). Espesor z está en mm (pasar a km = 1e-6)
     volumen_km3 = np.sum(grid_z[grid_z > 0.1] * 1e-6 * area_celda_km2)
     
     if volumen_km3 < 0.0001: vei = 1
@@ -341,7 +335,6 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                 lon, lat, z = df_mod['Longitud'].values, df_mod['Latitud'].values, df_mod[col_obj].values
                 grid_lon, grid_lat, grid_z, l_lon_min, l_lon_max, l_lat_min, l_lat_max = calcular_modelo_espacial(lon, lat, z, metodo_interp, resolucion)
                 
-                # Integración de Volumen (Solo para Isopacas)
                 if "Isopacas" in tipo_mapa_geo:
                     vol_km3, vei = calcular_volumen_integracion_2d(grid_lon, grid_lat, grid_z, c_lat)
                     st.success(f"🌋 **Cálculo de Volumen (Integración Numérica 2D):** Emisión total aproximada: **{vol_km3:.6f} km³** | Nivel VEI Estimado: **{vei}**")
@@ -388,8 +381,6 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                     if len(df_ml) < 4: st.warning("Se requieren al menos 4 muestras para entrenar.")
                     else:
                         st.info("🧠 **Red Neuronal / Random Forest Vectorial:** La IA simula el espesor reconociendo la distancia al cráter y el Azimut (dirección del viento) de tus datos históricos.")
-                        
-                        # INYECCIÓN DEL AZIMUT EN LA IA PARA QUE "ENTIENDA" EL VIENTO
                         X = df_ml[['Distancia_Crater_km', 'Azimut_Crater']]
                         y = df_ml['Espesor_Deposito_mm']
                         modelo_rf = RandomForestRegressor(n_estimators=100, random_state=42)
@@ -454,12 +445,8 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
             if st.button("➡️", use_container_width=True): st.session_state["idx_muestra"] = (st.session_state["idx_muestra"] + 1) % len(lista); st.rerun()
 
         d_crudo = df_fil[df_fil["ID_Muestra"] == m_sel].iloc[0]
-        
-        # 1. Gráfica Macro-Petrológica Principal
         d_pct = df_pct_fil[df_pct_fil["ID_Muestra"] == m_sel][cols_macro].iloc[0]
         d_graf = d_pct[d_pct > 0].reset_index(); d_graf.columns = ["Componente", "Porcentaje"]
-
-        # 2. Índice Magmático Félsico/Máfico
         d_ind = df_pct_fil[df_pct_fil["ID_Muestra"] == m_sel][cols_indice].iloc[0]
         d_ind_graf = d_ind[d_ind > 0].reset_index(); d_ind_graf.columns = ["Componente", "Porcentaje"]
 
@@ -499,7 +486,6 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
                 tx.markdown(f"<div style='text-align:center; margin-top:8px;'>Foto {st.session_state[k_est]+1}/{len(fotos_locales)}</div>", unsafe_allow_html=True)
                 if b2.button("➡️", key=f"nl_{m_sel}"): st.session_state[k_est] = (st.session_state[k_est] + 1) % len(fotos_locales)
                 st.image(fotos_locales[st.session_state[k_est]], caption=f"Archivo: {fotos_locales[st.session_state[k_est]].name}", use_container_width=True)
-
             elif "URLs_Fotos" in d_crudo and pd.notna(d_crudo["URLs_Fotos"]):
                 links = [u.strip() for u in str(d_crudo["URLs_Fotos"]).split(",") if u.strip().lower() != "nan"]
                 if links:
@@ -514,7 +500,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
 
         st.markdown("---")
         
-        # --- 2. ROSA DE VIENTOS Y TERNARIO (V-L-C EXACTO) ---
+        # --- 2. ROSA DE VIENTOS Y TERNARIO ---
         st.subheader("2. Petrología Pura y Rosa de Dispersión Atmosférica")
         c1, c2 = st.columns(2)
         with c1:
@@ -533,15 +519,15 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
             v_vel, v_dir = obtener_clima_crater_actual()
             clima_txt = f"Viento Actual (Satélite): **{v_vel} km/h hacia el {v_dir}**" if v_vel else "Viento Actual (Satélite): No disponible"
             if 'Direccion_Viento' in df_fil.columns:
-                df_polar = df_fil.groupby('Direccion_Viento')['Espesor_Deposito_mm'].sum().reset_index()
-                fig_p = px.bar_polar(df_polar, r="Espesor_Deposito_mm", theta="Direccion_Viento", color="Espesor_Deposito_mm", template="plotly_white", color_continuous_scale="Reds", title=f"Rosa de Dispersión Histórica<br><sup style='font-size:12px'>{clima_txt}</sup>")
+                # SE CORRIGIÓ SUMA POR MAX PARA EVITAR EL "DEPÓSITO FANTASMA"
+                df_polar = df_fil.groupby('Direccion_Viento')['Espesor_Deposito_mm'].max().reset_index()
+                fig_p = px.bar_polar(df_polar, r="Espesor_Deposito_mm", theta="Direccion_Viento", color="Espesor_Deposito_mm", template="plotly_white", color_continuous_scale="Reds", title=f"Rosa de Dispersión Histórica (Espesor Máximo)<br><sup style='font-size:12px'>{clima_txt}</sup>")
                 st.plotly_chart(fig_p, use_container_width=True)
 
         st.markdown("---")
         
-        # --- 3. EVOLUCIÓN TEMPORAL (CON FILTRO INTERNO DE MES) ---
+        # --- 3. EVOLUCIÓN TEMPORAL ---
         st.subheader("3. Evolución Temporal y Seguimiento")
-        
         if 'Fecha_Recoleccion' in df_fil.columns and not df_fil['Fecha_Recoleccion'].dropna().empty:
             meses_disp = sorted(df_fil['Fecha_Recoleccion'].dt.month.dropna().unique())
             mes_dict = {1:'Enero', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
@@ -572,7 +558,6 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
             # --- 4. RELACIONES ESPACIALES Y ESTADÍSTICAS ---
             st.subheader("4. Análisis Espacial y Correlación")
             c_dec, c_cor = st.columns(2)
-            
             with c_dec:
                 if 'Distancia_Crater_km' in df_track.columns and 'Espesor_Deposito_mm' in df_track.columns:
                     fig_decay = px.scatter(df_track, x="Distancia_Crater_km", y="Espesor_Deposito_mm", color="Localizacion", size="Tamaño_Promedio_mm", hover_name="ID_Muestra", title="Decaimiento Espacial (Espesor vs. Distancia)")
@@ -585,10 +570,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
                     df_corr = df_track[cols_to_corr].corr(method='pearson')
                     fig_corr = px.imshow(df_corr, text_auto=".2f", aspect="auto", color_continuous_scale="RdBu_r", title="Matriz de Correlación Macro", origin="lower")
                     st.plotly_chart(fig_corr, use_container_width=True)
-
-        else:
-            st.info("⚠️ Requiere columna de fecha válida para mostrar la evolución temporal.")
-
+        else: st.info("⚠️ Requiere columna de fecha válida para mostrar la evolución temporal.")
     except Exception as e: st.error(f"⚠️ Error renderizando el módulo de laboratorio: {e}")
 
 def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo):
@@ -617,10 +599,8 @@ def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo):
         st.markdown("---")
         st.subheader("📊 Comparativa de Distribución Macro-Mineralógica")
         df_comp_pct = df_pct_fil[df_pct_fil['ID_Muestra'].isin(muestras_seleccionadas)].copy()
-        
         df_melted = df_comp_pct.melt(id_vars=['ID_Muestra'], value_vars=cols_macro, var_name='Componente', value_name='Porcentaje')
         df_melted = df_melted[df_melted['Porcentaje'] > 0] 
-        
         fig_bar = px.bar(df_melted, x="ID_Muestra", y="Porcentaje", color="Componente", text="Porcentaje", color_discrete_map={"Vidrio": "#FF8C00", "Líticos": "#8B4513", "Cristales": "#9370DB", "Otros": "#A9A9A9"}, barmode="stack")
         fig_bar.update_traces(texttemplate='%{text:.1f}%', textposition='inside')
         fig_bar.update_layout(height=450)
@@ -639,7 +619,6 @@ def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo):
             df_comp_pct.to_excel(writer, index=False, sheet_name='Quimica_Porcentajes')
             
         st.download_button(label="📥 Descargar Comparativa Excel (.xlsx)", data=output.getvalue(), file_name="comparativa_cvlc.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
     except Exception as e: st.error(f"⚠️ Error renderizando el módulo comparativo: {e}")
 
 def renderizar_modulo_operativo(df_fil):
@@ -728,7 +707,6 @@ df_fil, df_pct_fil = df_bruto[m_v & m_f], df_pct_bruto[m_v & m_f]
 if df_fil.empty: st.warning("⚠️ Sin resultados para los filtros aplicados.")
 else:
     renderizar_kpis(df_fil, c_macro)
-    
     t_espacial, t_laboratorio, t_comparativo, t_operativo = st.tabs([
         "🌍 Módulo Espacial (Mapas)", 
         "🔬 Módulo de Laboratorio (Petrología)", 
