@@ -56,6 +56,22 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+# PALETA SEMÁNTICA AGRUPADA (Nuevos colores mejor distribuidos)
+color_map_oficial = {
+    # VIDRIOS (Gama de cálidos: Naranjas, Rojos, Amarillos)
+    "FV1": "#FF4500", "FV2": "#FF8C00", "FVA1": "#FFA500", "FV3": "#FFD700",
+    # LÍTICOS (Gama de tierras: Marrones, Cobrizos, Grises oscuros)
+    "LVA1": "#8B4513", "LVA2": "#A0522D", "LVA3": "#CD853F", "LVA4": "#D2691E", "Li_Alt": "#696969", "LV1": "#555555",
+    # CRISTALES (Gama fría/clara: Blancos, Verdes, Azules, Púrpuras)
+    "Plagioclasa": "#D3D3D3", "Pgl Alt": "#B0C4DE", "Qz": "#F0F8FF", "Cuarzo": "#F0F8FF",
+    "Px verde": "#2E8B57", "Px oscuro": "#2F4F4F", "Piroxeno": "#2F4F4F",
+    "Anfiboles": "#556B2F", "Epidotas": "#9ACD32", 
+    "ox_fe": "#8B0000", "Ox_Fe": "#8B0000",
+    "Azufre": "#EED202", "Micas": "#DAA520", "Otros_Cristales": "#9370DB",
+    # OTROS
+    "OTROS": "#808080", "Otros": "#808080"
+}
+
 colores_profesionales = px.colors.qualitative.Pastel
 LAT_CRATER = 2.313377
 LON_CRATER = -76.395088
@@ -184,7 +200,7 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     for col in cols_conteo + ['Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'Distancia_Crater_km']:
         if col in df_temp.columns: df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce').fillna(0)
 
-    # 2. AGRUPACIÓN MACRO Y EVOLUCIÓN MAGMÁTICA REVISADA
+    # 2. AGRUPACIÓN MACRO Y EVOLUCIÓN MAGMÁTICA
     c_v = [c for c in cols_conteo if 'FV' in c.upper() or 'VIDRIO' in c.upper()]
     c_l = [c for c in cols_conteo if 'LV' in c.upper() or 'LITICO' in c.upper() or 'LÍTICO' in c.upper() or 'LI_' in c.upper()]
     c_otros = [c for c in cols_conteo if c.upper() == 'OTROS']
@@ -426,7 +442,7 @@ def generar_pdf_reporte(m_sel, localizacion, fecha, espesor, tamano, riesgo, df_
 
 def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, cols_indice, fotos_subidas):
     try:
-        st.subheader("1. Caracterización Mineralógica Individual")
+        st.subheader("1. Caracterización Mineralógica Individual (Macro-Petrología)")
         lista = df_fil["ID_Muestra"].tolist()
         if "idx_muestra" not in st.session_state or st.session_state["idx_muestra"] >= len(lista): st.session_state["idx_muestra"] = 0
 
@@ -441,7 +457,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
 
         d_crudo = df_fil[df_fil["ID_Muestra"] == m_sel].iloc[0]
         
-        # Gráfica Detallada usando la nueva paleta de colores cualitativos
+        # Muestra la torta usando los colores semánticos definidos
         d_pct = df_pct_fil[df_pct_fil["ID_Muestra"] == m_sel][cols_conteo].iloc[0]
         d_graf = d_pct[d_pct > 0].reset_index(); d_graf.columns = ["Componente", "Porcentaje"]
         
@@ -452,7 +468,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
         with col_g:
             c_g1, c_g2 = st.columns(2)
             with c_g1:
-                fig = px.pie(d_graf, names="Componente", values="Porcentaje", hole=0.35, color_discrete_sequence=px.colors.qualitative.Pastel)
+                fig = px.pie(d_graf, names="Componente", values="Porcentaje", hole=0.35, color="Componente", color_discrete_map=color_map_oficial)
                 fig.update_traces(textposition="inside", textinfo="percent+label")
                 fig.update_layout(margin=dict(t=20, b=20, l=0, r=0), height=300, showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
@@ -597,29 +613,38 @@ def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo):
         st.markdown("---")
         st.subheader("📊 Comparativa de Distribución Mineralógica (Columna Estratigráfica)")
         
-        nivel_detalle = st.radio("Nivel de Análisis:", ["🔍 Mineralogía Detallada (Todas las categorías)", "🌍 Macro-Petrología (Vidrio, Líticos, Cristales)"], horizontal=True)
+        nivel_detalle = st.radio("Nivel de Análisis:", ["🔍 Mineralogía Detallada (Todas las subcategorías)", "🌍 Macro-Petrología (Vidrio, Líticos, Cristales)"], horizontal=True)
         cols_plot = cols_conteo if "Detallada" in nivel_detalle else cols_macro
+        
+        # Agrupar orden de apilamiento para que se vea como columna estratigráfica (Vidrios abajo, luego líticos, etc.)
+        c_v = [c for c in cols_conteo if 'FV' in c.upper() or 'VIDRIO' in c.upper()]
+        c_l = [c for c in cols_conteo if 'LV' in c.upper() or 'LITICO' in c.upper() or 'LÍTICO' in c.upper() or 'LI_' in c.upper()]
+        c_otros = [c for c in cols_conteo if c.upper() == 'OTROS']
+        c_c = [c for c in cols_conteo if c not in c_v + c_l + c_otros]
+        
+        orden_apilado = c_v + c_l + c_c + c_otros if "Detallada" in nivel_detalle else ['Vidrio', 'Líticos', 'Cristales', 'Otros']
+        cmap = color_map_oficial if "Detallada" in nivel_detalle else {"Vidrio": "#FF8C00", "Líticos": "#8B4513", "Cristales": "#9370DB", "Otros": "#808080"}
         
         df_comp_pct = df_pct_fil[df_pct_fil['ID_Muestra'].isin(muestras_seleccionadas)].copy()
         df_melted = df_comp_pct.melt(id_vars=['ID_Muestra'], value_vars=cols_plot, var_name='Componente', value_name='Porcentaje')
         df_melted = df_melted[df_melted['Porcentaje'] > 0] 
         
-        cmap = {"Vidrio": "#FF8C00", "Líticos": "#8B4513", "Cristales": "#9370DB", "Otros": "#A9A9A9"} if "Macro" in nivel_detalle else None
-        
-        # --- SOLUCIÓN: GRÁFICO DE BARRAS APILADAS AL 100% TIPO PAPER CIENTÍFICO ---
+        # --- GRÁFICO DE BARRAS APILADAS AL 100% ---
         fig_bar = px.bar(
             df_melted, x="ID_Muestra", y="Porcentaje", color="Componente", 
-            color_discrete_map=cmap, barmode="stack",
-            color_discrete_sequence=px.colors.qualitative.Pastel if not cmap else None
+            color_discrete_map=cmap, barmode="stack", 
+            category_orders={"Componente": orden_apilado}
         )
         
+        # Limpieza visual y grosor ajustado (bargap)
         fig_bar.update_traces(hovertemplate='<b>%{x}</b><br>%{data.name}: %{y:.1f}%<extra></extra>')
         fig_bar.update_layout(
             height=550, 
             margin=dict(t=30, b=100), 
             yaxis=dict(title="Porcentaje (%)", range=[0, 100]),
-            xaxis=dict(title="", tickangle=-90), # Etiquetas verticales en el eje X
-            legend_title="Componente"
+            xaxis=dict(title="", tickangle=-90),
+            legend_title="Componente",
+            bargap=0.4 # <-- Esto hace las barras más delgadas y juntas
         )
         st.plotly_chart(fig_bar, use_container_width=True)
 
