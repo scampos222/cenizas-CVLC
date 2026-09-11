@@ -56,17 +56,9 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-color_map_oficial = {
-    "LV1": "#555555", "LVA1": "#8B4513", "LVA2": "#A0522D", "LVA3": "#CD853F",
-    "Plagioclasa": "#D3D3D3", "Cuarzo": "#F5F5F5", "Piroxeno": "#2F4F4F", "Anfiboles": "#556B2F",
-    "FV1": "#FF8C00", "Epidotas": "#9ACD32", "Ox_Fe": "#8B0000", "Otros_Cristales": "#9370DB", "OTROS": "#FFD700"
-}
 colores_profesionales = px.colors.qualitative.Pastel
-
 LAT_CRATER = 2.313377
 LON_CRATER = -76.395088
-
-# Rosa de los vientos oficial para forzar la gráfica
 DIRECCIONES_BRUJULA = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
 
 # ==========================================
@@ -77,7 +69,6 @@ def limpiar_coordenada(valor):
     val_str = str(valor).strip().upper().replace(',', '.')
     try: return float(val_str)
     except ValueError: pass
-    
     numeros = re.findall(r"[\d\.]+", val_str)
     if not numeros: return np.nan
     dec = float(numeros[0])
@@ -193,14 +184,14 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     for col in cols_conteo + ['Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'Distancia_Crater_km']:
         if col in df_temp.columns: df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce').fillna(0)
 
-    # 2. AGRUPACIÓN MACRO Y EVOLUCIÓN MAGMÁTICA
+    # 2. AGRUPACIÓN MACRO Y EVOLUCIÓN MAGMÁTICA REVISADA
     c_v = [c for c in cols_conteo if 'FV' in c.upper() or 'VIDRIO' in c.upper()]
-    c_l = [c for c in cols_conteo if 'LV' in c.upper() or 'LITICO' in c.upper() or 'LÍTICO' in c.upper()]
+    c_l = [c for c in cols_conteo if 'LV' in c.upper() or 'LITICO' in c.upper() or 'LÍTICO' in c.upper() or 'LI_' in c.upper()]
     c_otros = [c for c in cols_conteo if c.upper() == 'OTROS']
     c_c = [c for c in cols_conteo if c not in c_v + c_l + c_otros]
     
-    c_felsicos = [c for c in cols_conteo if c.upper() in ['PLAGIOCLASA', 'CUARZO']]
-    c_maficos = [c for c in cols_conteo if c.upper() in ['PIROXENO', 'ANFIBOLES', 'EPIDOTAS', 'OX_FE', 'OLIVINO']]
+    c_felsicos = [c for c in cols_conteo if c.upper() in ['PLAGIOCLASA', 'CUARZO', 'QZ', 'PGL ALT']]
+    c_maficos = [c for c in cols_conteo if c.upper() in ['PIROXENO', 'ANFIBOLES', 'EPIDOTAS', 'OX_FE', 'OLIVINO', 'PX VERDE', 'PX OSCURO']]
 
     df_temp['Vidrio'] = df_temp[c_v].sum(axis=1) if c_v else 0
     df_temp['Líticos'] = df_temp[c_l].sum(axis=1) if c_l else 0
@@ -216,6 +207,7 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     
     df_pct_temp = df_temp.copy()
     if not df_temp[cols_macro].empty:
+        df_pct_temp[cols_conteo] = df_temp[cols_conteo].div(df_temp['Total_Granos_Calc'].replace(0, 1), axis=0) * 100
         df_pct_temp[cols_macro] = df_temp[cols_macro].div(df_temp['Total_Granos_Calc'].replace(0, 1), axis=0) * 100
         df_pct_temp[cols_indice] = df_temp[cols_indice].div(df_temp[['Félsicos', 'Máficos']].sum(axis=1).replace(0, 1), axis=0) * 100
 
@@ -434,7 +426,7 @@ def generar_pdf_reporte(m_sel, localizacion, fecha, espesor, tamano, riesgo, df_
 
 def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, cols_indice, fotos_subidas):
     try:
-        st.subheader("1. Caracterización Mineralógica Individual (Macro-Petrología)")
+        st.subheader("1. Caracterización Mineralógica Individual")
         lista = df_fil["ID_Muestra"].tolist()
         if "idx_muestra" not in st.session_state or st.session_state["idx_muestra"] >= len(lista): st.session_state["idx_muestra"] = 0
 
@@ -449,11 +441,10 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
 
         d_crudo = df_fil[df_fil["ID_Muestra"] == m_sel].iloc[0]
         
-        # 1. Gráfica Macro-Petrológica Principal
-        d_pct = df_pct_fil[df_pct_fil["ID_Muestra"] == m_sel][cols_macro].iloc[0]
+        # Gráfica Detallada usando la nueva paleta de colores cualitativos
+        d_pct = df_pct_fil[df_pct_fil["ID_Muestra"] == m_sel][cols_conteo].iloc[0]
         d_graf = d_pct[d_pct > 0].reset_index(); d_graf.columns = ["Componente", "Porcentaje"]
-
-        # 2. Índice Magmático Félsico/Máfico
+        
         d_ind = df_pct_fil[df_pct_fil["ID_Muestra"] == m_sel][cols_indice].iloc[0]
         d_ind_graf = d_ind[d_ind > 0].reset_index(); d_ind_graf.columns = ["Componente", "Porcentaje"]
 
@@ -461,7 +452,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
         with col_g:
             c_g1, c_g2 = st.columns(2)
             with c_g1:
-                fig = px.pie(d_graf, names="Componente", values="Porcentaje", hole=0.35, color="Componente", color_discrete_map={"Vidrio": "#FF8C00", "Líticos": "#8B4513", "Cristales": "#9370DB", "Otros": "#A9A9A9"})
+                fig = px.pie(d_graf, names="Componente", values="Porcentaje", hole=0.35, color_discrete_sequence=px.colors.qualitative.Pastel)
                 fig.update_traces(textposition="inside", textinfo="percent+label")
                 fig.update_layout(margin=dict(t=20, b=20, l=0, r=0), height=300, showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
@@ -527,20 +518,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
             clima_txt = f"Viento Actual (Satélite): **{v_vel} km/h hacia el {v_dir}**" if v_vel else "Viento Actual (Satélite): No disponible"
             if 'Direccion_Viento' in df_fil.columns:
                 df_polar = df_fil.groupby('Direccion_Viento')['Espesor_Deposito_mm'].max().reset_index()
-                
-                # --- SOLUCIÓN: FORZAR ORDEN CATEGÓRICO Y ROTACIÓN DE BRÚJULA GEOGRÁFICA ---
-                fig_p = px.bar_polar(
-                    df_polar, 
-                    r="Espesor_Deposito_mm", 
-                    theta="Direccion_Viento", 
-                    color="Espesor_Deposito_mm", 
-                    template="plotly_white", 
-                    color_continuous_scale="Reds", 
-                    title=f"Rosa de Dispersión Histórica (Espesor Máximo)<br><sup style='font-size:12px'>{clima_txt}</sup>",
-                    category_orders={"Direccion_Viento": DIRECCIONES_BRUJULA}
-                )
-                
-                # Rotar la gráfica para que N sea 0 grados (arriba) y el orden sea a las manecillas del reloj
+                fig_p = px.bar_polar(df_polar, r="Espesor_Deposito_mm", theta="Direccion_Viento", color="Espesor_Deposito_mm", template="plotly_white", color_continuous_scale="Reds", title=f"Rosa de Dispersión Histórica (Espesor Máximo)<br><sup style='font-size:12px'>{clima_txt}</sup>", category_orders={"Direccion_Viento": DIRECCIONES_BRUJULA})
                 fig_p.update_layout(polar=dict(angularaxis=dict(direction='clockwise', rotation=90)))
                 st.plotly_chart(fig_p, use_container_width=True)
 
@@ -617,13 +595,26 @@ def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo):
         if not muestras_seleccionadas: return st.info("Seleccione al menos una muestra para iniciar la comparativa.")
 
         st.markdown("---")
-        st.subheader("📊 Comparativa de Distribución Macro-Mineralógica")
+        st.subheader("📊 Comparativa de Distribución Mineralógica")
+        
+        # --- NUEVO: INTERRUPTOR DE DETALLE MINERAL ---
+        nivel_detalle = st.radio("Nivel de Análisis:", ["🔍 Mineralogía Detallada (Todas las categorías)", "🌍 Macro-Petrología (Vidrio, Líticos, Cristales)"], horizontal=True)
+        cols_plot = cols_conteo if "Detallada" in nivel_detalle else cols_macro
+        
         df_comp_pct = df_pct_fil[df_pct_fil['ID_Muestra'].isin(muestras_seleccionadas)].copy()
-        df_melted = df_comp_pct.melt(id_vars=['ID_Muestra'], value_vars=cols_macro, var_name='Componente', value_name='Porcentaje')
+        df_melted = df_comp_pct.melt(id_vars=['ID_Muestra'], value_vars=cols_plot, var_name='Componente', value_name='Porcentaje')
         df_melted = df_melted[df_melted['Porcentaje'] > 0] 
-        fig_bar = px.bar(df_melted, x="ID_Muestra", y="Porcentaje", color="Componente", text="Porcentaje", color_discrete_map={"Vidrio": "#FF8C00", "Líticos": "#8B4513", "Cristales": "#9370DB", "Otros": "#A9A9A9"}, barmode="stack")
-        fig_bar.update_traces(texttemplate='%{text:.1f}%', textposition='inside')
-        fig_bar.update_layout(height=450)
+        
+        cmap = {"Vidrio": "#FF8C00", "Líticos": "#8B4513", "Cristales": "#9370DB", "Otros": "#A9A9A9"} if "Macro" in nivel_detalle else None
+        
+        # --- NUEVO: BARRAS PARALELAS (barmode='group') ---
+        fig_bar = px.bar(
+            df_melted, x="ID_Muestra", y="Porcentaje", color="Componente", 
+            text="Porcentaje", color_discrete_map=cmap, barmode="group",
+            color_discrete_sequence=px.colors.qualitative.Set2 if not cmap else None
+        )
+        fig_bar.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+        fig_bar.update_layout(height=500, margin=dict(t=30), yaxis=dict(range=[0, 110]))
         st.plotly_chart(fig_bar, use_container_width=True)
 
         st.markdown("---")
