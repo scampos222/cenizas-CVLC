@@ -21,7 +21,6 @@ import requests
 
 try:
     from sklearn.ensemble import RandomForestRegressor
-    from sklearn.neighbors import KNeighborsRegressor
     ML_DISPONIBLE = True
 except ImportError:
     ML_DISPONIBLE = False
@@ -57,17 +56,9 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-color_map_oficial = {
-    "LV1": "#555555", "LVA1": "#8B4513", "LVA2": "#A0522D", "LVA3": "#CD853F",
-    "Plagioclasa": "#D3D3D3", "Cuarzo": "#F5F5F5", "Piroxeno": "#2F4F4F", "Anfiboles": "#556B2F",
-    "FV1": "#FF8C00", "Epidotas": "#9ACD32", "Ox_Fe": "#8B0000", "Otros_Cristales": "#9370DB", "OTROS": "#FFD700"
-}
 colores_profesionales = px.colors.qualitative.Pastel
-
 LAT_CRATER = 2.313377
 LON_CRATER = -76.395088
-
-# Rosa de los vientos oficial para forzar la gráfica
 DIRECCIONES_BRUJULA = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
 
 # ==========================================
@@ -78,7 +69,6 @@ def limpiar_coordenada(valor):
     val_str = str(valor).strip().upper().replace(',', '.')
     try: return float(val_str)
     except ValueError: pass
-    
     numeros = re.findall(r"[\d\.]+", val_str)
     if not numeros: return np.nan
     dec = float(numeros[0])
@@ -133,7 +123,7 @@ def obtener_url_imagen(url_original):
     return url_limpia
 
 # ==========================================
-# 3. MOTOR DE DATOS (PETROLOGÍA EXACTA E INTERPOLACIÓN ML)
+# 3. MOTOR DE DATOS (PETROLOGÍA EXACTA)
 # ==========================================
 @st.cache_data(show_spinner="Calculando y agrupando petrología...")
 def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
@@ -194,34 +184,14 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     for col in cols_conteo + ['Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'Distancia_Crater_km']:
         if col in df_temp.columns: df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce').fillna(0)
 
-    # --- NUEVO: INTERPOLACIÓN ML PARA CONTEOS FALTANTES (Ej. 117 y 119) ---
-    df_temp['Dato_Interpolado'] = False
-    if ML_DISPONIBLE:
-        temp_totales = df_temp[cols_conteo].sum(axis=1)
-        sin_petro_idx = df_temp[temp_totales == 0].index
-        con_petro_idx = df_temp[temp_totales > 0].index
-        
-        if len(sin_petro_idx) > 0 and len(con_petro_idx) > 0:
-            nn = KNeighborsRegressor(n_neighbors=1) # Busca la muestra exacta/más cercana (ej. 118)
-            X_train = df_temp.loc[con_petro_idx, ['Latitud', 'Longitud']]
-            y_train = df_temp.loc[con_petro_idx, cols_conteo]
-            nn.fit(X_train, y_train)
-            
-            X_missing = df_temp.loc[sin_petro_idx, ['Latitud', 'Longitud']]
-            pred_counts = nn.predict(X_missing)
-            
-            # Copiar el conteo idéntico a las muestras en ceros
-            df_temp.loc[sin_petro_idx, cols_conteo] = pred_counts
-            df_temp.loc[sin_petro_idx, 'Dato_Interpolado'] = True
-
-    # 2. AGRUPACIÓN MACRO Y EVOLUCIÓN MAGMÁTICA
+    # 2. AGRUPACIÓN MACRO Y EVOLUCIÓN MAGMÁTICA REVISADA
     c_v = [c for c in cols_conteo if 'FV' in c.upper() or 'VIDRIO' in c.upper()]
-    c_l = [c for c in cols_conteo if 'LV' in c.upper() or 'LITICO' in c.upper() or 'LÍTICO' in c.upper()]
+    c_l = [c for c in cols_conteo if 'LV' in c.upper() or 'LITICO' in c.upper() or 'LÍTICO' in c.upper() or 'LI_' in c.upper()]
     c_otros = [c for c in cols_conteo if c.upper() == 'OTROS']
     c_c = [c for c in cols_conteo if c not in c_v + c_l + c_otros]
     
-    c_felsicos = [c for c in cols_conteo if c.upper() in ['PLAGIOCLASA', 'CUARZO']]
-    c_maficos = [c for c in cols_conteo if c.upper() in ['PIROXENO', 'ANFIBOLES', 'EPIDOTAS', 'OX_FE', 'OLIVINO']]
+    c_felsicos = [c for c in cols_conteo if c.upper() in ['PLAGIOCLASA', 'CUARZO', 'QZ', 'PGL ALT']]
+    c_maficos = [c for c in cols_conteo if c.upper() in ['PIROXENO', 'ANFIBOLES', 'EPIDOTAS', 'OX_FE', 'OLIVINO', 'PX VERDE', 'PX OSCURO']]
 
     df_temp['Vidrio'] = df_temp[c_v].sum(axis=1) if c_v else 0
     df_temp['Líticos'] = df_temp[c_l].sum(axis=1) if c_l else 0
@@ -237,6 +207,7 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     
     df_pct_temp = df_temp.copy()
     if not df_temp[cols_macro].empty:
+        df_pct_temp[cols_conteo] = df_temp[cols_conteo].div(df_temp['Total_Granos_Calc'].replace(0, 1), axis=0) * 100
         df_pct_temp[cols_macro] = df_temp[cols_macro].div(df_temp['Total_Granos_Calc'].replace(0, 1), axis=0) * 100
         df_pct_temp[cols_indice] = df_temp[cols_indice].div(df_temp[['Félsicos', 'Máficos']].sum(axis=1).replace(0, 1), axis=0) * 100
 
@@ -455,7 +426,7 @@ def generar_pdf_reporte(m_sel, localizacion, fecha, espesor, tamano, riesgo, df_
 
 def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, cols_indice, fotos_subidas):
     try:
-        st.subheader("1. Caracterización Mineralógica Individual (Macro-Petrología)")
+        st.subheader("1. Caracterización Mineralógica Individual")
         lista = df_fil["ID_Muestra"].tolist()
         if "idx_muestra" not in st.session_state or st.session_state["idx_muestra"] >= len(lista): st.session_state["idx_muestra"] = 0
 
@@ -469,8 +440,11 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
             if st.button("➡️", use_container_width=True): st.session_state["idx_muestra"] = (st.session_state["idx_muestra"] + 1) % len(lista); st.rerun()
 
         d_crudo = df_fil[df_fil["ID_Muestra"] == m_sel].iloc[0]
-        d_pct = df_pct_fil[df_pct_fil["ID_Muestra"] == m_sel][cols_macro].iloc[0]
+        
+        # Gráfica Detallada usando la nueva paleta de colores cualitativos
+        d_pct = df_pct_fil[df_pct_fil["ID_Muestra"] == m_sel][cols_conteo].iloc[0]
         d_graf = d_pct[d_pct > 0].reset_index(); d_graf.columns = ["Componente", "Porcentaje"]
+        
         d_ind = df_pct_fil[df_pct_fil["ID_Muestra"] == m_sel][cols_indice].iloc[0]
         d_ind_graf = d_ind[d_ind > 0].reset_index(); d_ind_graf.columns = ["Componente", "Porcentaje"]
 
@@ -478,7 +452,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
         with col_g:
             c_g1, c_g2 = st.columns(2)
             with c_g1:
-                fig = px.pie(d_graf, names="Componente", values="Porcentaje", hole=0.35, color="Componente", color_discrete_map={"Vidrio": "#FF8C00", "Líticos": "#8B4513", "Cristales": "#9370DB", "Otros": "#A9A9A9"})
+                fig = px.pie(d_graf, names="Componente", values="Porcentaje", hole=0.35, color_discrete_sequence=px.colors.qualitative.Pastel)
                 fig.update_traces(textposition="inside", textinfo="percent+label")
                 fig.update_layout(margin=dict(t=20, b=20, l=0, r=0), height=300, showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
@@ -621,13 +595,32 @@ def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo):
         if not muestras_seleccionadas: return st.info("Seleccione al menos una muestra para iniciar la comparativa.")
 
         st.markdown("---")
-        st.subheader("📊 Comparativa de Distribución Macro-Mineralógica")
+        st.subheader("📊 Comparativa de Distribución Mineralógica (Columna Estratigráfica)")
+        
+        nivel_detalle = st.radio("Nivel de Análisis:", ["🔍 Mineralogía Detallada (Todas las categorías)", "🌍 Macro-Petrología (Vidrio, Líticos, Cristales)"], horizontal=True)
+        cols_plot = cols_conteo if "Detallada" in nivel_detalle else cols_macro
+        
         df_comp_pct = df_pct_fil[df_pct_fil['ID_Muestra'].isin(muestras_seleccionadas)].copy()
-        df_melted = df_comp_pct.melt(id_vars=['ID_Muestra'], value_vars=cols_macro, var_name='Componente', value_name='Porcentaje')
+        df_melted = df_comp_pct.melt(id_vars=['ID_Muestra'], value_vars=cols_plot, var_name='Componente', value_name='Porcentaje')
         df_melted = df_melted[df_melted['Porcentaje'] > 0] 
-        fig_bar = px.bar(df_melted, x="ID_Muestra", y="Porcentaje", color="Componente", text="Porcentaje", color_discrete_map={"Vidrio": "#FF8C00", "Líticos": "#8B4513", "Cristales": "#9370DB", "Otros": "#A9A9A9"}, barmode="stack")
-        fig_bar.update_traces(texttemplate='%{text:.1f}%', textposition='inside')
-        fig_bar.update_layout(height=450)
+        
+        cmap = {"Vidrio": "#FF8C00", "Líticos": "#8B4513", "Cristales": "#9370DB", "Otros": "#A9A9A9"} if "Macro" in nivel_detalle else None
+        
+        # --- SOLUCIÓN: GRÁFICO DE BARRAS APILADAS AL 100% TIPO PAPER CIENTÍFICO ---
+        fig_bar = px.bar(
+            df_melted, x="ID_Muestra", y="Porcentaje", color="Componente", 
+            color_discrete_map=cmap, barmode="stack",
+            color_discrete_sequence=px.colors.qualitative.Pastel if not cmap else None
+        )
+        
+        fig_bar.update_traces(hovertemplate='<b>%{x}</b><br>%{data.name}: %{y:.1f}%<extra></extra>')
+        fig_bar.update_layout(
+            height=550, 
+            margin=dict(t=30, b=100), 
+            yaxis=dict(title="Porcentaje (%)", range=[0, 100]),
+            xaxis=dict(title="", tickangle=-90), # Etiquetas verticales en el eje X
+            legend_title="Componente"
+        )
         st.plotly_chart(fig_bar, use_container_width=True)
 
         st.markdown("---")
@@ -655,20 +648,12 @@ def renderizar_modulo_operativo(df_fil):
         if not esp_cero.empty: errores.append(f"{len(esp_cero)} muestras tienen espesor 0 o negativo.")
         
         if 'Total_Granos_Calc' in df_fil.columns:
-            # Ahora el sistema QA/QC es consciente de que hay datos interpolados inteligentemente
-            sin_minerales = df_fil[(df_fil['Total_Granos_Calc'] == 0) & (df_fil['Dato_Interpolado'] == False)]
+            sin_minerales = df_fil[df_fil['Total_Granos_Calc'] == 0]
             if not sin_minerales.empty: errores.append(f"{len(sin_minerales)} muestras sin conteo mineralógico válido.")
 
         if errores:
             for err in errores: st.error(f"🔴 ALERTA QA/QC: {err}")
         else: st.success("🟢 ¡QA/QC Aprobado! Integridad total de datos confirmada.")
-        
-        # Alerta informativa de la IA
-        if 'Dato_Interpolado' in df_fil.columns:
-            interpoladas = df_fil[df_fil['Dato_Interpolado'] == True]
-            if not interpoladas.empty:
-                ids = ", ".join(interpoladas['ID_Muestra'].astype(str).tolist()[:3])
-                st.warning(f"🟡 **Aviso de Autocompletado Espacial:** Se autocompletó la mineralogía de **{len(interpoladas)}** muestra(s) (Ej. {ids}) copiando geográficamente los datos de su vecino más cercano.")
 
         st.markdown("---")
         st.subheader("Semáforo de Gestión del Riesgo y Operaciones")
