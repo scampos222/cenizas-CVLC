@@ -16,7 +16,6 @@ import matplotlib.pyplot as plt
 import io
 import base64
 import math
-import branca.colormap as cm
 import requests
 
 try:
@@ -56,16 +55,16 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# PALETA SEMÁNTICA AGRUPADA
-color_map_oficial = {
-    "FV1": "#FF4500", "FV2": "#FF8C00", "FVA1": "#FFA500", "FV3": "#FFD700",
-    "LVA1": "#8B4513", "LVA2": "#A0522D", "LVA3": "#CD853F", "LVA4": "#D2691E", "Li_Alt": "#696969", "LV1": "#555555",
-    "Plagioclasa": "#D3D3D3", "Pgl Alt": "#B0C4DE", "Qz": "#F0F8FF", "Cuarzo": "#F0F8FF",
-    "Px verde": "#2E8B57", "Px oscuro": "#2F4F4F", "Piroxeno": "#2F4F4F",
-    "Anfiboles": "#556B2F", "Epidotas": "#9ACD32", 
-    "ox_fe": "#8B0000", "Ox_Fe": "#8B0000",
-    "Azufre": "#EED202", "Micas": "#DAA520", "Otros_Cristales": "#9370DB",
-    "OTROS": "#808080", "Otros": "#808080"
+# PALETA SEMÁNTICA OFICIAL (Idéntica al Paper/Tesis)
+color_map_paper = {
+    "Fragmentos vesiculados frescos": "#A9C1D9", # Gris/Azul claro
+    "Fragmentos vesiculados alterados": "#E68A8A", # Salmón
+    "Cristales": "#FCF5D8", # Amarillo pálido
+    "Líticos volcánicos frescos": "#8E8E8E", # Gris
+    "Líticos volcánicos alterados": "#7CB342", # Verde
+    "Líticos no volcánicos frescos": "#8E44AD", # Púrpura
+    "Líticos no volcánicos alterados": "#C0392B", # Rojo oscuro
+    "Otros": "#2980B9" # Azul fuerte
 }
 
 colores_profesionales = px.colors.qualitative.Pastel
@@ -135,9 +134,9 @@ def obtener_url_imagen(url_original):
     return url_limpia
 
 # ==========================================
-# 3. MOTOR DE DATOS (PETROLOGÍA EXACTA)
+# 3. MOTOR DE DATOS (NUEVO ESTÁNDAR CIENTÍFICO)
 # ==========================================
-@st.cache_data(show_spinner="Calculando y agrupando petrología...")
+@st.cache_data(show_spinner="Calculando y agrupando petrología oficial...")
 def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     df_temp = None
     if usar_sql:
@@ -154,7 +153,7 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
                 if match: df_temp = pd.read_csv(f"https://docs.google.com/spreadsheets/d/{match.group(1)}/export?format=csv")
             except Exception: pass 
             
-    if df_temp is None or df_temp.empty: return pd.DataFrame(), pd.DataFrame(), [], [], [], []
+    if df_temp is None or df_temp.empty: return pd.DataFrame(), pd.DataFrame(), [], [], [], [], []
 
     rename_dict = {}
     for c in df_temp.columns:
@@ -196,23 +195,40 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     for col in cols_conteo + ['Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'Distancia_Crater_km']:
         if col in df_temp.columns: df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce').fillna(0)
 
-    # 2. AGRUPACIÓN MACRO Y EVOLUCIÓN MAGMÁTICA REVISADA
-    c_v = [c for c in cols_conteo if 'FV' in c.upper() or 'VIDRIO' in c.upper()]
-    c_l = [c for c in cols_conteo if 'LV' in c.upper() or 'LITICO' in c.upper() or 'LÍTICO' in c.upper() or 'LI_' in c.upper()]
+    # --- CLASIFICACIÓN MACRO EN LAS 8 CATEGORÍAS CIENTÍFICAS ---
+    c_fv_frescos = [c for c in cols_conteo if c.upper().startswith('FV') and not c.upper().startswith('FVA')]
+    c_fv_alterados = [c for c in cols_conteo if c.upper().startswith('FVA')]
+    c_lv_frescos = [c for c in cols_conteo if c.upper().startswith('LV') and not c.upper().startswith('LVA')]
+    c_lv_alterados = [c for c in cols_conteo if c.upper().startswith('LVA') or c.upper() == 'LI_ALT']
+    c_lt_frescos = [c for c in cols_conteo if c.upper().startswith('LT') and not c.upper().startswith('LTA')]
+    c_lt_alterados = [c for c in cols_conteo if c.upper().startswith('LTA')]
     c_otros = [c for c in cols_conteo if c.upper() == 'OTROS']
-    c_c = [c for c in cols_conteo if c not in c_v + c_l + c_otros]
     
-    c_felsicos = [c for c in cols_conteo if c.upper() in ['PLAGIOCLASA', 'CUARZO', 'QZ', 'PGL ALT']]
-    c_maficos = [c for c in cols_conteo if c.upper() in ['PIROXENO', 'ANFIBOLES', 'EPIDOTAS', 'OX_FE', 'OLIVINO', 'PX VERDE', 'PX OSCURO']]
+    # Cristales son todos los demás
+    c_c = [c for c in cols_conteo if c not in c_fv_frescos + c_fv_alterados + c_lv_frescos + c_lv_alterados + c_lt_frescos + c_lt_alterados + c_otros]
+    
+    # Índice Félsico vs Máfico
+    c_felsicos = [c for c in c_c if c.upper() in ['PLAGIOCLASA', 'CUARZO', 'QZ', 'PGL ALT']]
+    c_maficos = [c for c in c_c if c.upper() in ['PIROXENO', 'ANFIBOLES', 'EPIDOTAS', 'OX_FE', 'OLIVINO', 'PX VERDE', 'PX OSCURO', 'OX FE']]
 
-    df_temp['Vidrio'] = df_temp[c_v].sum(axis=1) if c_v else 0
-    df_temp['Líticos'] = df_temp[c_l].sum(axis=1) if c_l else 0
+    # Calcular las sumas oficiales
+    df_temp['Fragmentos vesiculados frescos'] = df_temp[c_fv_frescos].sum(axis=1) if c_fv_frescos else 0
+    df_temp['Fragmentos vesiculados alterados'] = df_temp[c_fv_alterados].sum(axis=1) if c_fv_alterados else 0
+    df_temp['Líticos volcánicos frescos'] = df_temp[c_lv_frescos].sum(axis=1) if c_lv_frescos else 0
+    df_temp['Líticos volcánicos alterados'] = df_temp[c_lv_alterados].sum(axis=1) if c_lv_alterados else 0
+    df_temp['Líticos no volcánicos frescos'] = df_temp[c_lt_frescos].sum(axis=1) if c_lt_frescos else 0
+    df_temp['Líticos no volcánicos alterados'] = df_temp[c_lt_alterados].sum(axis=1) if c_lt_alterados else 0
     df_temp['Cristales'] = df_temp[c_c].sum(axis=1) if c_c else 0
     df_temp['Otros'] = df_temp[c_otros].sum(axis=1) if c_otros else 0
+    
     df_temp['Félsicos'] = df_temp[c_felsicos].sum(axis=1) if c_felsicos else 0
     df_temp['Máficos'] = df_temp[c_maficos].sum(axis=1) if c_maficos else 0
     
-    cols_macro = ['Vidrio', 'Líticos', 'Cristales', 'Otros']
+    cols_macro = [
+        "Fragmentos vesiculados frescos", "Fragmentos vesiculados alterados", "Cristales",
+        "Líticos volcánicos frescos", "Líticos volcánicos alterados", 
+        "Líticos no volcánicos frescos", "Líticos no volcánicos alterados", "Otros"
+    ]
     cols_indice = ['Félsicos', 'Máficos']
     
     df_temp['Total_Granos_Calc'] = df_temp[cols_macro].sum(axis=1)
@@ -223,7 +239,10 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
         df_pct_temp[cols_macro] = df_temp[cols_macro].div(df_temp['Total_Granos_Calc'].replace(0, 1), axis=0) * 100
         df_pct_temp[cols_indice] = df_temp[cols_indice].div(df_temp[['Félsicos', 'Máficos']].sum(axis=1).replace(0, 1), axis=0) * 100
 
-    return df_temp, df_pct_temp, cols_conteo, cols_macro, cols_indice
+    # Retornamos todo ordenado
+    orden_cat_detallado = c_fv_frescos + c_fv_alterados + c_c + c_lv_frescos + c_lv_alterados + c_lt_frescos + c_lt_alterados + c_otros
+
+    return df_temp, df_pct_temp, cols_conteo, cols_macro, cols_indice, orden_cat_detallado
 
 @st.cache_data(show_spinner="Interpolando con Matemática Espacial...")
 def calcular_modelo_espacial(lon, lat, z, metodo_interp, resolucion):
@@ -273,7 +292,10 @@ def renderizar_kpis(df_fil, cols_macro):
     try:
         m_count = len(df_fil)
         max_esp = df_fil['Espesor_Deposito_mm'].max() if 'Espesor_Deposito_mm' in df_fil.columns else 0
-        min_dom = df_fil[['Vidrio', 'Líticos', 'Cristales']].sum().idxmax() if not df_fil.empty else "N/A"
+        
+        # Evitar 'Otros' en el KPI dominante
+        cols_dom = [c for c in cols_macro if c != 'Otros']
+        min_dom = df_fil[cols_dom].sum().idxmax() if not df_fil.empty else "N/A"
         dir_dom = df_fil['Direccion_Viento'].mode()[0] if 'Direccion_Viento' in df_fil.columns and not df_fil['Direccion_Viento'].empty else "N/A"
         
         st.info(f"**📝 Resumen Analítico:** Se analizaron **{m_count} muestras** con un espesor máximo de **{max_esp} mm**. La dispersión predominante indica un transporte de ceniza hacia el **{dir_dom}**. Mineralógicamente, el depósito está dominado por **{min_dom}**.")
@@ -438,7 +460,7 @@ def generar_pdf_reporte(m_sel, localizacion, fecha, espesor, tamano, riesgo, df_
 
 def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, cols_indice, fotos_subidas):
     try:
-        st.subheader("1. Caracterización Mineralógica Individual")
+        st.subheader("1. Caracterización Mineralógica Individual (Macro-Petrología Oficial)")
         lista = df_fil["ID_Muestra"].tolist()
         if "idx_muestra" not in st.session_state or st.session_state["idx_muestra"] >= len(lista): st.session_state["idx_muestra"] = 0
 
@@ -453,8 +475,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
 
         d_crudo = df_fil[df_fil["ID_Muestra"] == m_sel].iloc[0]
         
-        # Gráfica Detallada usando la nueva paleta de colores cualitativos
-        d_pct = df_pct_fil[df_pct_fil["ID_Muestra"] == m_sel][cols_conteo].iloc[0]
+        d_pct = df_pct_fil[df_pct_fil["ID_Muestra"] == m_sel][cols_macro].iloc[0]
         d_graf = d_pct[d_pct > 0].reset_index(); d_graf.columns = ["Componente", "Porcentaje"]
         
         d_ind = df_pct_fil[df_pct_fil["ID_Muestra"] == m_sel][cols_indice].iloc[0]
@@ -464,7 +485,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
         with col_g:
             c_g1, c_g2 = st.columns(2)
             with c_g1:
-                fig = px.pie(d_graf, names="Componente", values="Porcentaje", hole=0.35, color_discrete_sequence=px.colors.qualitative.Pastel)
+                fig = px.pie(d_graf, names="Componente", values="Porcentaje", hole=0.35, color="Componente", color_discrete_map=color_map_paper)
                 fig.update_traces(textposition="inside", textinfo="percent+label")
                 fig.update_layout(margin=dict(t=20, b=20, l=0, r=0), height=300, showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
@@ -515,12 +536,17 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
         c1, c2 = st.columns(2)
         with c1:
             df_tp = df_fil.copy()
-            df_tp['Suma_VLC'] = df_tp['Vidrio'] + df_tp['Líticos'] + df_tp['Cristales']
+            # El ternario V-L-C sobrevive agrupando las 8 macro-categorías internamente
+            df_tp['Vidrio'] = df_tp['Fragmentos vesiculados frescos'] + df_tp['Fragmentos vesiculados alterados']
+            df_tp['Líticos'] = df_tp['Líticos volcánicos frescos'] + df_tp['Líticos volcánicos alterados'] + df_tp['Líticos no volcánicos frescos'] + df_tp['Líticos no volcánicos alterados']
+            df_tp['Cristales_Ternario'] = df_tp['Cristales']
+            
+            df_tp['Suma_VLC'] = df_tp['Vidrio'] + df_tp['Líticos'] + df_tp['Cristales_Ternario']
             df_tp = df_tp[df_tp['Suma_VLC'] > 0]
             if not df_tp.empty:
                 df_tp['V%'] = (df_tp['Vidrio'] / df_tp['Suma_VLC']) * 100
                 df_tp['L%'] = (df_tp['Líticos'] / df_tp['Suma_VLC']) * 100
-                df_tp['C%'] = (df_tp['Cristales'] / df_tp['Suma_VLC']) * 100
+                df_tp['C%'] = (df_tp['Cristales_Ternario'] / df_tp['Suma_VLC']) * 100
                 fig_t = px.scatter_ternary(df_tp, a='V%', b='L%', c='C%', color="Nivel_Riesgo", hover_name="ID_Muestra", size="Tamaño_Promedio_mm", title="Clasificación Petrológica (100% Magmático)")
                 fig_t.update_layout(ternary=dict(aaxis_title='Vidrio %', baxis_title='Líticos %', caxis_title='Cristales %'), margin=dict(t=40,b=40,l=40,r=40))
                 st.plotly_chart(fig_t, use_container_width=True)
@@ -554,7 +580,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
                     df_a['Fecha'] = df_track['Fecha_Recoleccion']
                     df_a = df_a.sort_values('Fecha').groupby('Fecha', as_index=False)[cols_macro].mean()
                     df_a = df_a.melt(id_vars='Fecha', value_vars=cols_macro, var_name='Componente', value_name='Porcentaje')
-                    fig_a = px.area(df_a, x="Fecha", y="Porcentaje", color="Componente", color_discrete_map={"Vidrio": "#FF8C00", "Líticos": "#8B4513", "Cristales": "#9370DB", "Otros": "#A9A9A9"}, title="Evolución Mineralógica Macro")
+                    fig_a = px.area(df_a, x="Fecha", y="Porcentaje", color="Componente", color_discrete_map=color_map_paper, title="Evolución Mineralógica Macro")
                     fig_a.update_layout(yaxis=dict(range=[0, 100]), margin=dict(t=30, b=20, l=10, r=10))
                     st.plotly_chart(fig_a, use_container_width=True)
                 
@@ -583,7 +609,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
         else: st.info("⚠️ Requiere columna de fecha válida para mostrar la evolución temporal.")
     except Exception as e: st.error(f"⚠️ Error renderizando el módulo de laboratorio: {e}")
 
-def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo):
+def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo, orden_cat_detallado):
     try:
         st.subheader("⚖️ Análisis Comparativo Multi-Muestra")
         col_f1, col_f2 = st.columns(2)
@@ -607,39 +633,46 @@ def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo):
         if not muestras_seleccionadas: return st.info("Seleccione al menos una muestra para iniciar la comparativa.")
 
         st.markdown("---")
-        st.subheader("📊 Comparativa de Distribución Mineralógica (Columna Estratigráfica)")
+        st.subheader("📊 Columna Estratigráfica (% Mineralógico)")
         
-        nivel_detalle = st.radio("Nivel de Análisis:", ["🔍 Mineralogía Detallada (Todas las subcategorías)", "🌍 Macro-Petrología (Vidrio, Líticos, Cristales)"], horizontal=True)
-        cols_plot = cols_conteo if "Detallada" in nivel_detalle else cols_macro
+        nivel_detalle = st.radio("Nivel de Análisis:", ["🌍 Macro-Petrología (Formato Paper Cietífico)", "🔍 Mineralogía Detallada (Todas las subcategorías)"], horizontal=True)
+        cols_plot = cols_macro if "Macro" in nivel_detalle else cols_conteo
         
-        # Agrupar orden de apilamiento
-        c_v = [c for c in cols_conteo if 'FV' in c.upper() or 'VIDRIO' in c.upper()]
-        c_l = [c for c in cols_conteo if 'LV' in c.upper() or 'LITICO' in c.upper() or 'LÍTICO' in c.upper() or 'LI_' in c.upper()]
-        c_otros = [c for c in cols_conteo if c.upper() == 'OTROS']
-        c_c = [c for c in cols_conteo if c not in c_v + c_l + c_otros]
+        # Orden de apilamiento tipo paper (de abajo hacia arriba)
+        orden_apilado_macro = [
+            "Fragmentos vesiculados frescos",
+            "Fragmentos vesiculados alterados",
+            "Cristales",
+            "Líticos volcánicos frescos",
+            "Líticos volcánicos alterados",
+            "Líticos no volcánicos frescos",
+            "Líticos no volcánicos alterados",
+            "Otros"
+        ]
         
-        orden_apilado = c_v + c_l + c_c + c_otros if "Detallada" in nivel_detalle else ['Vidrio', 'Líticos', 'Cristales', 'Otros']
-        cmap = color_map_oficial if "Detallada" in nivel_detalle else {"Vidrio": "#FF8C00", "Líticos": "#8B4513", "Cristales": "#9370DB", "Otros": "#808080"}
+        orden_apilado = orden_apilado_macro if "Macro" in nivel_detalle else orden_cat_detallado
+        cmap = color_map_paper if "Macro" in nivel_detalle else None
         
         df_comp_pct = df_pct_fil[df_pct_fil['ID_Muestra'].isin(muestras_seleccionadas)].copy()
         df_melted = df_comp_pct.melt(id_vars=['ID_Muestra'], value_vars=cols_plot, var_name='Componente', value_name='Porcentaje')
         df_melted = df_melted[df_melted['Porcentaje'] > 0] 
         
-        # --- ESTILO PAPER CIENTÍFICO (Fondo blanco, cuadrícula, bordes negros) ---
+        # --- GRÁFICO TIPO PAPER CIENTÍFICO (Bordes negros, fondo blanco) ---
         fig_bar = px.bar(
             df_melted, x="ID_Muestra", y="Porcentaje", color="Componente", 
             color_discrete_map=cmap, barmode="stack", 
-            category_orders={"Componente": orden_apilado}
+            category_orders={"Componente": orden_apilado},
+            color_discrete_sequence=px.colors.qualitative.Pastel if not cmap else None
         )
         
         fig_bar.update_traces(
             hovertemplate='<b>%{x}</b><br>%{data.name}: %{y:.1f}%<extra></extra>',
-            marker_line_color='black', # Borde negro en las barras
-            marker_line_width=0.5
+            marker_line_color='black', # Borde negro para delinear cada estrato
+            marker_line_width=0.8
         )
         
         fig_bar.update_layout(
-            height=550, 
+            height=600, 
             margin=dict(t=30, b=100), 
             yaxis=dict(
                 title="<b>Porcentaje (%)</b>", 
@@ -728,7 +761,7 @@ with st.sidebar.expander("📂 Carga de Datos y Nube", expanded=not usar_sql):
     a_geo = st.file_uploader("Capa Veredas (.geojson)", type=["geojson", "json"])
     fotos_subidas = st.file_uploader("📷 Subir Fotos Locales (Multiselección)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
-df_bruto, df_pct_bruto, c_conteo, c_macro, c_indice = cargar_y_limpiar_datos(a_sub, url_gs, usar_sql)
+df_bruto, df_pct_bruto, c_conteo, c_macro, c_indice, orden_cat_detallado = cargar_y_limpiar_datos(a_sub, url_gs, usar_sql)
 
 if df_bruto.empty:
     st.error("No se detectaron datos válidos.")
@@ -771,5 +804,5 @@ else:
     
     with t_espacial: renderizar_modulo_espacial(df_fil, a_geo)
     with t_laboratorio: renderizar_modulo_laboratorio(df_fil, df_pct_fil, c_conteo, c_macro, c_indice, fotos_subidas)
-    with t_comparativo: renderizar_modulo_comparativo(df_fil, df_pct_fil, c_macro, c_conteo)
+    with t_comparativo: renderizar_modulo_comparativo(df_fil, df_pct_fil, c_macro, c_conteo, orden_cat_detallado)
     with t_operativo: renderizar_modulo_operativo(df_fil)
