@@ -57,7 +57,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# PALETA SEMÁNTICA OFICIAL (Basada en formato institucional)
+# PALETA SEMÁNTICA OFICIAL
 color_map_paper = {
     "Fragmentos vesiculados frescos": "#A9C1D9",
     "Fragmentos vesiculados alterados": "#E68A8A",
@@ -150,7 +150,7 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
                 if match: df_temp = pd.read_csv(f"https://docs.google.com/spreadsheets/d/{match.group(1)}/export?format=csv")
             except Exception: pass 
             
-    if df_temp is None or df_temp.empty: return pd.DataFrame(), pd.DataFrame(), [], [], [], []
+    if df_temp is None or df_temp.empty: return pd.DataFrame(), pd.DataFrame(), [], [], []
 
     rename_dict = {}
     for c in df_temp.columns:
@@ -189,18 +189,15 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     for col in cols_conteo + ['Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'Distancia_Crater_km']:
         if col in df_temp.columns: df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce').fillna(0)
 
-    # CLASIFICACIÓN MACRO ADAPTADA AL NUEVO EXCEL
+    # CLASIFICACIÓN MACRO EN CATEGORÍAS INSTITUCIONALES (Excel Base)
     c_fv_frescos = [c for c in cols_conteo if c.upper().startswith('FV') and not c.upper().startswith('FVA')]
     c_fv_alterados = [c for c in cols_conteo if c.upper().startswith('FVA')]
     c_lv_frescos = [c for c in cols_conteo if c.upper().startswith('LV') and not c.upper().startswith('LVA')]
     c_lv_alterados = [c for c in cols_conteo if c.upper().startswith('LVA') or c.upper() == 'LI_ALT']
     c_lt_frescos = [c for c in cols_conteo if c.upper().startswith('LT') and not c.upper().startswith('LTA')]
     c_lt_alterados = [c for c in cols_conteo if c.upper().startswith('LTA')]
+    c_otros = [c for c in cols_conteo if c.upper() == 'OTROS']
     
-    # Capturamos la columna 'Unnamed: 36' o 'Otros' como Otros
-    c_otros = [c for c in cols_conteo if c.upper() == 'OTROS' or c.upper().startswith('UNNAMED')]
-    
-    # Cristales son todos los demás (Pl, Px, Anf, Bt, Ol, Ep, Ox Fe, Mg, Qz, Otros cristales, etc.)
     c_c = [c for c in cols_conteo if c not in c_fv_frescos + c_fv_alterados + c_lv_frescos + c_lv_alterados + c_lt_frescos + c_lt_alterados + c_otros]
 
     df_temp['Fragmentos vesiculados frescos'] = df_temp[c_fv_frescos].sum(axis=1) if c_fv_frescos else 0
@@ -212,13 +209,6 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     df_temp['Cristales'] = df_temp[c_c].sum(axis=1) if c_c else 0
     df_temp['Otros'] = df_temp[c_otros].sum(axis=1) if c_otros else 0
     
-    # Mantenemos las categorías Félsicos y Máficos por si las requieres en el futuro
-    c_felsicos = [c for c in c_c if c.upper() in ['PLAGIOCLASA', 'CUARZO', 'QZ', 'PGL ALT', 'PL']]
-    c_maficos = [c for c in c_c if c.upper() in ['PIROXENO', 'ANFIBOLES', 'EPIDOTAS', 'OX_FE', 'OLIVINO', 'PX VERDE', 'PX OSCURO', 'OX FE', 'PX', 'ANF', 'BT', 'OL', 'EP', 'MG']]
-    
-    df_temp['Félsicos'] = df_temp[c_felsicos].sum(axis=1) if c_felsicos else 0
-    df_temp['Máficos'] = df_temp[c_maficos].sum(axis=1) if c_maficos else 0
-    
     cols_macro = [
         "Fragmentos vesiculados frescos", "Fragmentos vesiculados alterados", "Cristales",
         "Líticos volcánicos frescos", "Líticos volcánicos alterados", 
@@ -229,12 +219,15 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     
     df_pct_temp = df_temp.copy()
     if not df_temp[cols_macro].empty:
-        df_pct_temp[cols_conteo] = df_temp[cols_conteo].div(df_temp['Total_Granos_Calc'].replace(0, 1), axis=0) * 100
         df_pct_temp[cols_macro] = df_temp[cols_macro].div(df_temp['Total_Granos_Calc'].replace(0, 1), axis=0) * 100
+        
+        # NORMALIZAR CRISTALES AL 100% PARA GRÁFICO ESPECÍFICO (Sección P72-Z72 del Excel)
+        if c_c:
+            suma_cris = df_temp[c_c].sum(axis=1).replace(0, 1)
+            for cristal in c_c:
+                df_pct_temp[f"CRIS_{cristal}"] = (df_temp[cristal] / suma_cris) * 100
 
-    orden_cat_detallado = c_fv_frescos + c_fv_alterados + c_c + c_lv_frescos + c_lv_alterados + c_lt_frescos + c_lt_alterados + c_otros
-
-    return df_temp, df_pct_temp, cols_conteo, cols_macro, c_c, orden_cat_detallado
+    return df_temp, df_pct_temp, cols_conteo, cols_macro, c_c
 
 @st.cache_data(show_spinner="Interpolando modelos espaciales...")
 def calcular_modelo_espacial(lon, lat, z, metodo_interp, resolucion):
@@ -260,21 +253,6 @@ def calcular_modelo_espacial(lon, lat, z, metodo_interp, resolucion):
     
     grid_z = np.clip(grid_z, 0, z.max() * 1.2)
     return grid_lon, grid_lat, grid_z, lim_lon_min, lim_lon_max, lim_lat_min, lim_lat_max
-
-def calcular_volumen_integracion_2d(grid_lon, grid_lat, grid_z, c_lat):
-    d_lon = abs(grid_lon[1,0] - grid_lon[0,0])
-    d_lat = abs(grid_lat[0,1] - grid_lat[0,0])
-    area_celda_km2 = (d_lon * 111.32) * (d_lat * 111.32 * math.cos(math.radians(c_lat)))
-    volumen_km3 = np.sum(grid_z[grid_z > 0.1] * 1e-6 * area_celda_km2)
-    
-    if volumen_km3 < 0.0001: vei = 1
-    elif volumen_km3 < 0.001: vei = 2
-    elif volumen_km3 < 0.01: vei = 3
-    elif volumen_km3 < 0.1: vei = 4
-    elif volumen_km3 < 1: vei = 5
-    else: vei = "6+"
-    
-    return volumen_km3, vei
 
 # ==========================================
 # 4. MÓDULOS MACRO-PESTAÑAS
@@ -355,10 +333,6 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
                 lon, lat, z = df_mod['Longitud'].values, df_mod['Latitud'].values, df_mod[col_obj].values
                 grid_lon, grid_lat, grid_z, l_lon_min, l_lon_max, l_lat_min, l_lat_max = calcular_modelo_espacial(lon, lat, z, metodo_interp, resolucion)
                 
-                if "Isopacas" in tipo_mapa_geo:
-                    vol_km3, vei = calcular_volumen_integracion_2d(grid_lon, grid_lat, grid_z, c_lat)
-                    st.success(f"**Cálculo de Volumen (Integración Numérica 2D):** Emisión total aproximada: **{vol_km3:.6f} km³** | Nivel VEI Estimado: **{vei}**")
-
                 fig = plt.figure(frameon=False)
                 ax = fig.add_axes([0, 0, 1, 1])
                 ax.axis('off'); ax.set_xlim(l_lon_min, l_lon_max); ax.set_ylim(l_lat_min, l_lat_max)
@@ -424,29 +398,6 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
 
     except Exception as e: st.error(f"Error al renderizar el módulo espacial: {e}")
 
-def generar_pdf_reporte(m_sel, localizacion, fecha, espesor, tamano, df_graf):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", 'B', 16)
-    pdf.cell(200, 10, txt="REPORTE OFICIAL - OBSERVATORIO VULCANOLOGICO", ln=True, align='C')
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(200, 10, txt=f"Muestra: {m_sel}", ln=True, align='C')
-    pdf.ln(10)
-    pdf.set_font("Arial", '', 12)
-    pdf.cell(200, 10, txt=f"Localizacion: {localizacion}", ln=True)
-    pdf.cell(200, 10, txt=f"Fecha de Recoleccion: {fecha}", ln=True)
-    pdf.cell(200, 10, txt=f"Espesor del Deposito: {espesor}", ln=True)
-    pdf.ln(10)
-    pdf.set_font("Arial", 'B', 14)
-    pdf.cell(200, 10, txt="Composicion Mineralogica (%)", ln=True)
-    pdf.set_font("Arial", '', 12)
-    for index, row in df_graf.iterrows():
-        comp_limpio = str(row['Componente']).encode('latin-1', 'ignore').decode('latin-1')
-        pdf.cell(200, 10, txt=f"- {comp_limpio}: {round(row['Porcentaje'], 2)}%", ln=True)
-    
-    pdf_output = pdf.output(dest='S').encode('latin-1', 'ignore')
-    return f'<a href="data:application/pdf;base64,{base64.b64encode(pdf_output).decode()}" download="Reporte_{m_sel}.pdf" class="button" style="text-decoration:none;background-color:#2980B9;color:white;padding:8px 12px;border-radius:5px;font-size:14px;font-weight:bold;">Descargar Ficha Técnica (PDF)</a>'
-
 def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c_cristales, fotos_subidas):
     try:
         st.subheader("1. Caracterización de Componentes Individual")
@@ -463,43 +414,15 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
             if st.button("▶", use_container_width=True): st.session_state["idx_muestra"] = (st.session_state["idx_muestra"] + 1) % len(lista); st.rerun()
 
         d_crudo = df_fil[df_fil["ID_Muestra"] == m_sel].iloc[0]
-        
-        # 1. Gráfica de Resumen Macro
         d_pct = df_pct_fil[df_pct_fil["ID_Muestra"] == m_sel][cols_macro].iloc[0]
         d_graf = d_pct[d_pct > 0].reset_index(); d_graf.columns = ["Componente", "Porcentaje"]
         
-        # 2. Gráfica % Cristal (Total Cristales) según la plantilla Excel
-        d_cris = d_crudo[c_cristales]
-        d_cris = d_cris[d_cris > 0]
-        if not d_cris.empty and d_cris.sum() > 0:
-            d_cris_pct = (d_cris / d_cris.sum()) * 100
-            d_cris_graf = d_cris_pct.reset_index()
-            d_cris_graf.columns = ["Componente", "Porcentaje"]
-        else:
-            d_cris_graf = pd.DataFrame(columns=["Componente", "Porcentaje"])
-
         col_g, col_f = st.columns([1.3, 1])
         with col_g:
-            c_g1, c_g2 = st.columns(2)
-            with c_g1:
-                fig = px.pie(d_graf, names="Componente", values="Porcentaje", hole=0.35, color="Componente", color_discrete_map=color_map_paper)
-                fig.update_traces(textposition="inside", textinfo="percent+label")
-                fig.update_layout(margin=dict(t=20, b=20, l=0, r=0), height=300, showlegend=False, title="Resumen Componentes")
-                st.plotly_chart(fig, use_container_width=True)
-            with c_g2:
-                if not d_cris_graf.empty:
-                    fig2 = px.bar(d_cris_graf, x="Componente", y="Porcentaje", color="Componente", title="% Cristal (Total Cristales)", color_discrete_sequence=colores_profesionales)
-                    fig2.update_traces(marker_line_color='black', marker_line_width=0.8, width=0.3)
-                    fig2.update_layout(
-                        margin=dict(t=30, b=20, l=0, r=0), 
-                        height=300, 
-                        showlegend=False,
-                        plot_bgcolor='white',
-                        paper_bgcolor='white',
-                        yaxis=dict(showgrid=True, gridcolor='lightgray', title=""),
-                        xaxis=dict(showline=True, linecolor='black', title="")
-                    )
-                    st.plotly_chart(fig2, use_container_width=True)
+            fig = px.pie(d_graf, names="Componente", values="Porcentaje", hole=0.35, color="Componente", color_discrete_map=color_map_paper)
+            fig.update_traces(textposition="inside", textinfo="percent+label")
+            fig.update_layout(margin=dict(t=20, b=20, l=0, r=0), height=350, showlegend=False, title="Resumen Componentes")
+            st.plotly_chart(fig, use_container_width=True)
 
             f_val = pd.to_datetime(d_crudo['Fecha_Recoleccion']).strftime('%Y-%m-%d') if pd.notna(d_crudo.get('Fecha_Recoleccion')) else 'N/A'
             st.markdown(f"""
@@ -507,10 +430,6 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
                 <b>Localización:</b> {d_crudo.get('Localizacion','N/A')} &nbsp;|&nbsp; <b>Fecha:</b> {f_val} &nbsp;|&nbsp; <b>Tamaño:</b> {d_crudo.get('Tamaño_Promedio_mm',0)} mm &nbsp;|&nbsp; <b>Espesor:</b> {d_crudo.get('Espesor_Deposito_mm',0)} mm<br>
                 <b>Viento Histórico:</b> {d_crudo.get('Direccion_Viento', 'N/A')}
             </div>""", unsafe_allow_html=True)
-            
-            if PDF_DISPONIBLE:
-                pdf_html = generar_pdf_reporte(m_sel, d_crudo.get('Localizacion','N/A'), f_val, f"{d_crudo.get('Espesor_Deposito_mm',0)} mm", f"{d_crudo.get('Tamaño_Promedio_mm',0)} mm", d_graf)
-                st.markdown(f"<div style='margin-top: 15px;'>{pdf_html}</div>", unsafe_allow_html=True)
 
         with col_f:
             fotos_locales = [f for f in fotos_subidas if m_sel.lower() in f.name.lower()]
@@ -537,8 +456,8 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
 
         st.markdown("---")
         
-        # --- 2. ROSA DE VIENTOS Y TERNARIO (V-L-C EXACTO) ---
-        st.subheader("2. Petrología Pura y Rosa de Dispersión Atmosférica")
+        # --- 2. TERNARIO Y ROSA DE VIENTOS ---
+        st.subheader("2. Diagramas de Petrología y Dispersión")
         c1, c2 = st.columns(2)
         with c1:
             df_tp = df_fil.copy()
@@ -614,7 +533,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
         else: st.info("Requiere columna de fecha válida para mostrar la evolución temporal.")
     except Exception as e: st.error(f"Error renderizando el módulo de laboratorio: {e}")
 
-def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo, orden_cat_detallado):
+def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo, c_cristales):
     try:
         st.subheader("Análisis Comparativo Multi-Muestra")
         col_f1, col_f2 = st.columns(2)
@@ -640,62 +559,60 @@ def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo, o
         st.markdown("---")
         st.subheader("Variación Composicional (% Componentes)")
         
-        nivel_detalle = st.radio("Nivel de Análisis:", ["Resumen Componentes Contados (Macro)", "Porcentaje de Componentes (Detallado)"], horizontal=True)
-        cols_plot = cols_macro if "Macro" in nivel_detalle else cols_conteo
+        nivel_detalle = st.radio("Nivel de Análisis:", ["Resumen Componentes Contados (Macro)", "% Cristal (Total Cristales)"], horizontal=True)
         
-        orden_apilado_macro = [
-            "Fragmentos vesiculados frescos",
-            "Fragmentos vesiculados alterados",
-            "Cristales",
-            "Líticos volcánicos frescos",
-            "Líticos volcánicos alterados",
-            "Líticos no volcánicos frescos",
-            "Líticos no volcánicos alterados",
-            "Otros"
-        ]
-        
-        orden_apilado = orden_apilado_macro if "Macro" in nivel_detalle else orden_cat_detallado
-        cmap = color_map_paper if "Macro" in nivel_detalle else None
-        
-        df_comp_pct = df_pct_fil[df_pct_fil['ID_Muestra'].isin(muestras_seleccionadas)].copy()
-        df_melted = df_comp_pct.melt(id_vars=['ID_Muestra'], value_vars=cols_plot, var_name='Componente', value_name='Porcentaje')
-        df_melted = df_melted[df_melted['Porcentaje'] > 0] 
-        
-        fig_bar = px.bar(
-            df_melted, x="ID_Muestra", y="Porcentaje", color="Componente", 
-            color_discrete_map=cmap, barmode="stack", 
-            category_orders={"Componente": orden_apilado},
-            color_discrete_sequence=px.colors.qualitative.Pastel if not cmap else None
-        )
-        
-        fig_bar.update_traces(
-            hovertemplate='<b>%{x}</b><br>%{data.name}: %{y:.1f}%<extra></extra>',
-            marker_line_color='black',
-            marker_line_width=0.8,
-            width=0.3  # Barras delgadas para formato estético
-        )
-        
-        fig_bar.update_layout(
-            height=600, 
-            margin=dict(t=30, b=100), 
-            yaxis=dict(
-                title="<b>Porcentaje (%)</b>", 
-                range=[0, 100], 
-                dtick=10, 
-                showgrid=True, 
-                gridcolor='lightgray'
-            ),
-            xaxis=dict(
-                title="", 
-                tickangle=-90, 
-                showline=True, 
-                linecolor='black'
-            ),
-            plot_bgcolor='white',
-            paper_bgcolor='white',
-            legend_title="<b>Componente</b>"
-        )
-        st.plotly_chart(fig_bar, use_container_width=True)
+        if "Macro" in nivel_detalle:
+            df_comp_pct = df_pct_fil[df_pct_fil['ID_Muestra'].isin(muestras_seleccionadas)].copy()
+            df_melted = df_comp_pct.melt(id_vars=['ID_Muestra'], value_vars=cols_macro, var_name='Componente', value_name='Porcentaje')
+            df_melted = df_melted[df_melted['Porcentaje'] > 0] 
+            
+            orden_apilado = [
+                "Fragmentos vesiculados frescos", "Fragmentos vesiculados alterados", "Cristales",
+                "Líticos volcánicos frescos", "Líticos volcánicos alterados",
+                "Líticos no volcánicos frescos", "Líticos no volcánicos alterados", "Otros"
+            ]
+            
+            fig_bar = px.bar(
+                df_melted, x="ID_Muestra", y="Porcentaje", color="Componente", 
+                color_discrete_map=color_map_paper, barmode="stack", 
+                category_orders={"Componente": orden_apilado}
+            )
+            
+            fig_bar.update_traces(
+                hovertemplate='<b>%{x}</b><br>%{data.name}: %{y:.1f}%<extra></extra>',
+                marker_line_color='black', marker_line_width=0.8, width=0.3
+            )
+            
+            fig_bar.update_layout(
+                height=600, margin=dict(t=30, b=100), 
+                yaxis=dict(title="<b>Porcentaje (%)</b>", range=[0, 100], dtick=10, showgrid=True, gridcolor='lightgray'),
+                xaxis=dict(title="", tickangle=-90, showline=True, linecolor='black'),
+                plot_bgcolor='white', paper_bgcolor='white', legend_title="<b>Componente</b>"
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+            
+        else:
+            # Gráfico de % de Cristales
+            df_cris = df_fil[df_fil['ID_Muestra'].isin(muestras_seleccionadas)][['ID_Muestra'] + c_cristales].copy()
+            df_cris[c_cristales] = df_cris[c_cristales].div(df_cris[c_cristales].sum(axis=1).replace(0, 1), axis=0) * 100
+            df_melted = df_cris.melt(id_vars=['ID_Muestra'], value_vars=c_cristales, var_name='Componente', value_name='Porcentaje')
+            df_melted = df_melted[df_melted['Porcentaje'] > 0] 
+            
+            fig_bar = px.bar(
+                df_melted, x="ID_Muestra", y="Porcentaje", color="Componente", 
+                barmode="stack", color_discrete_sequence=colores_profesionales
+            )
+            fig_bar.update_traces(
+                hovertemplate='<b>%{x}</b><br>%{data.name}: %{y:.1f}%<extra></extra>',
+                marker_line_color='black', marker_line_width=0.8, width=0.3
+            )
+            fig_bar.update_layout(
+                height=600, margin=dict(t=30, b=100), 
+                yaxis=dict(title="<b>Porcentaje (%)</b>", range=[0, 100], dtick=10, showgrid=True, gridcolor='lightgray'),
+                xaxis=dict(title="", tickangle=-90, showline=True, linecolor='black'),
+                plot_bgcolor='white', paper_bgcolor='white', legend_title="<b>Cristal</b>"
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
 
         st.markdown("---")
         st.subheader("Comparativa Físico-Espacial")
@@ -707,9 +624,11 @@ def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo, o
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_fisico.to_excel(writer, index=False, sheet_name='Datos_Fisicos_Geo')
-            df_comp_pct.to_excel(writer, index=False, sheet_name='Quimica_Porcentajes')
+            # Exportar ambas tablas para replicar el Excel original
+            df_pct_fil[df_pct_fil['ID_Muestra'].isin(muestras_seleccionadas)][['ID_Muestra'] + cols_macro].to_excel(writer, index=False, sheet_name='Pct_Macro')
+            df_cris.to_excel(writer, index=False, sheet_name='Pct_Cristales')
             
-        st.download_button(label="Descargar Comparativa Excel (.xlsx)", data=output.getvalue(), file_name="comparativa_cvlc.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button(label="Descargar Tablas de Cálculos Excel (.xlsx)", data=output.getvalue(), file_name="tablas_calculos_cvlc.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     except Exception as e: st.error(f"Error renderizando el módulo comparativo: {e}")
 
 def renderizar_modulo_operativo(df_fil):
@@ -738,7 +657,7 @@ def renderizar_modulo_operativo(df_fil):
         st.dataframe(df_mostrar, hide_index=True, use_container_width=True)
         
         st.markdown("---"); st.subheader("Base de Datos Estructural (Cruda Original)")
-        cols_excluir = ['Vidrio', 'Líticos', 'Cristales', 'Otros', 'Félsicos', 'Máficos', 'Total_Granos_Calc']
+        cols_excluir = ['Vidrio', 'Líticos', 'Cristales', 'Otros', 'Total_Granos_Calc']
         cols_mostrar_crudo = [c for c in df_fil.columns if c not in cols_excluir]
         st.dataframe(df_fil[cols_mostrar_crudo], use_container_width=True)
     except Exception as e: st.error(f"Error cargando el módulo de datos operativos: {e}")
@@ -757,7 +676,7 @@ with st.sidebar.expander("Carga de Datos y Conexiones", expanded=not usar_sql):
     a_geo = st.file_uploader("Capa Veredas (.geojson)", type=["geojson", "json"])
     fotos_subidas = st.file_uploader("Subir Fotos Locales (Multiselección)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
-df_bruto, df_pct_bruto, c_conteo, c_macro, c_cristales, orden_cat_detallado = cargar_y_limpiar_datos(a_sub, url_gs, usar_sql)
+df_bruto, df_pct_bruto, c_conteo, c_macro, c_cristales = cargar_y_limpiar_datos(a_sub, url_gs, usar_sql)
 
 if df_bruto.empty:
     st.error("No se detectaron datos válidos.")
@@ -800,5 +719,5 @@ else:
     
     with t_espacial: renderizar_modulo_espacial(df_fil, a_geo)
     with t_laboratorio: renderizar_modulo_laboratorio(df_fil, df_pct_fil, c_conteo, c_macro, c_cristales, fotos_subidas)
-    with t_comparativo: renderizar_modulo_comparativo(df_fil, df_pct_fil, c_macro, c_conteo, orden_cat_detallado)
+    with t_comparativo: renderizar_modulo_comparativo(df_fil, df_pct_fil, c_macro, c_conteo, c_cristales)
     with t_operativo: renderizar_modulo_operativo(df_fil)
