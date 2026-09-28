@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import io
 import base64
 import math
+import requests
 
 try:
     from sklearn.ensemble import RandomForestRegressor
@@ -36,7 +37,6 @@ except ImportError:
     KRIGING_DISPONIBLE = False
 
 import branca.colormap as cm
-import requests
 
 # ==========================================
 # 1. CONFIGURACIÓN Y CONSTANTES
@@ -189,16 +189,18 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     for col in cols_conteo + ['Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'Distancia_Crater_km']:
         if col in df_temp.columns: df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce').fillna(0)
 
-    # CLASIFICACIÓN MACRO EN CATEGORÍAS INSTITUCIONALES (Excel Base)
+    # CLASIFICACIÓN MACRO ADAPTADA AL NUEVO EXCEL
     c_fv_frescos = [c for c in cols_conteo if c.upper().startswith('FV') and not c.upper().startswith('FVA')]
     c_fv_alterados = [c for c in cols_conteo if c.upper().startswith('FVA')]
     c_lv_frescos = [c for c in cols_conteo if c.upper().startswith('LV') and not c.upper().startswith('LVA')]
     c_lv_alterados = [c for c in cols_conteo if c.upper().startswith('LVA') or c.upper() == 'LI_ALT']
     c_lt_frescos = [c for c in cols_conteo if c.upper().startswith('LT') and not c.upper().startswith('LTA')]
     c_lt_alterados = [c for c in cols_conteo if c.upper().startswith('LTA')]
-    c_otros = [c for c in cols_conteo if c.upper() == 'OTROS']
     
-    # Identificación específica de Cristales (c_c) para gráfico "% Cristal (total cristales)"
+    # Capturamos la columna 'Unnamed: 36' o 'Otros' como Otros
+    c_otros = [c for c in cols_conteo if c.upper() == 'OTROS' or c.upper().startswith('UNNAMED')]
+    
+    # Cristales son todos los demás (Pl, Px, Anf, Bt, Ol, Ep, Ox Fe, Mg, Qz, Otros cristales, etc.)
     c_c = [c for c in cols_conteo if c not in c_fv_frescos + c_fv_alterados + c_lv_frescos + c_lv_alterados + c_lt_frescos + c_lt_alterados + c_otros]
 
     df_temp['Fragmentos vesiculados frescos'] = df_temp[c_fv_frescos].sum(axis=1) if c_fv_frescos else 0
@@ -209,6 +211,13 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     df_temp['Líticos no volcánicos alterados'] = df_temp[c_lt_alterados].sum(axis=1) if c_lt_alterados else 0
     df_temp['Cristales'] = df_temp[c_c].sum(axis=1) if c_c else 0
     df_temp['Otros'] = df_temp[c_otros].sum(axis=1) if c_otros else 0
+    
+    # Mantenemos las categorías Félsicos y Máficos por si las requieres en el futuro
+    c_felsicos = [c for c in c_c if c.upper() in ['PLAGIOCLASA', 'CUARZO', 'QZ', 'PGL ALT', 'PL']]
+    c_maficos = [c for c in c_c if c.upper() in ['PIROXENO', 'ANFIBOLES', 'EPIDOTAS', 'OX_FE', 'OLIVINO', 'PX VERDE', 'PX OSCURO', 'OX FE', 'PX', 'ANF', 'BT', 'OL', 'EP', 'MG']]
+    
+    df_temp['Félsicos'] = df_temp[c_felsicos].sum(axis=1) if c_felsicos else 0
+    df_temp['Máficos'] = df_temp[c_maficos].sum(axis=1) if c_maficos else 0
     
     cols_macro = [
         "Fragmentos vesiculados frescos", "Fragmentos vesiculados alterados", "Cristales",
@@ -480,7 +489,16 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
             with c_g2:
                 if not d_cris_graf.empty:
                     fig2 = px.bar(d_cris_graf, x="Componente", y="Porcentaje", color="Componente", title="% Cristal (Total Cristales)", color_discrete_sequence=colores_profesionales)
-                    fig2.update_layout(margin=dict(t=30, b=20, l=0, r=0), height=300, showlegend=False)
+                    fig2.update_traces(marker_line_color='black', marker_line_width=0.8, width=0.3)
+                    fig2.update_layout(
+                        margin=dict(t=30, b=20, l=0, r=0), 
+                        height=300, 
+                        showlegend=False,
+                        plot_bgcolor='white',
+                        paper_bgcolor='white',
+                        yaxis=dict(showgrid=True, gridcolor='lightgray', title=""),
+                        xaxis=dict(showline=True, linecolor='black', title="")
+                    )
                     st.plotly_chart(fig2, use_container_width=True)
 
             f_val = pd.to_datetime(d_crudo['Fecha_Recoleccion']).strftime('%Y-%m-%d') if pd.notna(d_crudo.get('Fecha_Recoleccion')) else 'N/A'
@@ -653,7 +671,8 @@ def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo, o
         fig_bar.update_traces(
             hovertemplate='<b>%{x}</b><br>%{data.name}: %{y:.1f}%<extra></extra>',
             marker_line_color='black',
-            marker_line_width=0.8
+            marker_line_width=0.8,
+            width=0.3  # Barras delgadas para formato estético
         )
         
         fig_bar.update_layout(
@@ -674,8 +693,7 @@ def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo, o
             ),
             plot_bgcolor='white',
             paper_bgcolor='white',
-            legend_title="<b>Componente</b>",
-            bargap=0.3
+            legend_title="<b>Componente</b>"
         )
         st.plotly_chart(fig_bar, use_container_width=True)
 
