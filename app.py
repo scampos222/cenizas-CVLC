@@ -1,10 +1,10 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import folium
 from folium.plugins import MarkerCluster, HeatMap
-from streamlit_folium import st_folium
 import re
 import json
 import pydeck as pdk
@@ -54,10 +54,9 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# PALETA SEMÁNTICA OFICIAL
+# PALETA SEMÁNTICA OFICIAL (Vidrios unificados en "Fragmento de vidrio")
 color_map_paper = {
-    "Fragmentos de vidrio frescos (FV)": "#A9C1D9",
-    "Fragmentos de vidrio alterados (FVA)": "#E68A8A",
+    "Fragmento de vidrio": "#A9C1D9",
     "Cristales": "#FCF5D8",
     "Líticos volcánicos frescos": "#8E8E8E",
     "Líticos volcánicos alterados": "#7CB342",
@@ -67,8 +66,7 @@ color_map_paper = {
 }
 
 ORDEN_APILADO_MACRO = [
-    "Fragmentos de vidrio frescos (FV)",
-    "Fragmentos de vidrio alterados (FVA)",
+    "Fragmento de vidrio",
     "Cristales",
     "Líticos volcánicos frescos",
     "Líticos volcánicos alterados",
@@ -76,6 +74,12 @@ ORDEN_APILADO_MACRO = [
     "Líticos no volcánicos alterados",
     "Otros"
 ]
+
+MESES_ES = {
+    1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
+    5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
+    9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
+}
 
 colores_profesionales = px.colors.qualitative.Pastel
 LAT_CRATER = 2.313377
@@ -88,6 +92,13 @@ DIRECCIONES_BRUJULA = [
 # ==========================================
 # 2. FUNCIONES MATEMÁTICAS Y AUXILIARES
 # ==========================================
+def formatear_anio_mes(ym_str):
+    try:
+        anio, mes = str(ym_str).split('-')
+        return f"{MESES_ES.get(int(mes), mes)} {anio}"
+    except Exception:
+        return str(ym_str)
+
 def limpiar_coordenada(valor):
     if pd.isna(valor):
         return np.nan
@@ -212,6 +223,10 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
 
     df_temp.rename(columns=rename_dict, inplace=True)
 
+    # Evitar colisión en vista detallada si coexisten las columnas "Otros" y "Carbón"
+    if 'Otros' in df_temp.columns and any('CARB' in str(c).upper() for c in df_temp.columns):
+        df_temp.rename(columns={'Otros': 'Otros indif.'}, inplace=True)
+
     if 'ID_Muestra' in df_temp.columns:
         df_temp = df_temp.dropna(subset=['ID_Muestra']).copy()
         df_temp['ID_Muestra'] = df_temp['ID_Muestra'].astype(str).str.strip()
@@ -266,23 +281,27 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     df_temp['Tamaño_Promedio_mm'] = pd.to_numeric(df_temp['Tamaño_Promedio_mm'], errors='coerce')
     df_temp['Espesor_Deposito_mm'] = pd.to_numeric(df_temp['Espesor_Deposito_mm'], errors='coerce')
 
-    # Clasificación en las 8 categorías oficiales (FV = Fragmentos de vidrio)
-    c_fv_frescos = [c for c in cols_conteo if c.upper().startswith('FV') and not c.upper().startswith('FVA')]
-    c_fv_alterados = [c for c in cols_conteo if c.upper().startswith('FVA')]
+    # Clasificación unificada: todos los FV y FVA suman a "Fragmento de vidrio"
+    c_fv = [c for c in cols_conteo if c.upper().startswith('FV') or 'VIDRIO' in c.upper()]
     c_lv_frescos = [c for c in cols_conteo if c.upper().startswith('LV') and not c.upper().startswith('LVA')]
     c_lv_alterados = [c for c in cols_conteo if c.upper().startswith('LVA') or c.upper() == 'LI_ALT']
     c_lt_frescos = [c for c in cols_conteo if c.upper().startswith('LT') and not c.upper().startswith('LTA')]
     c_lt_alterados = [c for c in cols_conteo if c.upper().startswith('LTA')]
-    c_otros = [c for c in cols_conteo if c.upper() == 'OTROS' or c.upper().startswith('UNNAMED')]
+    c_otros = [
+        c for c in cols_conteo
+        if c.upper() in ['OTROS', 'OTROS INDIF.']
+        or c.upper().startswith('UNNAMED')
+        or 'CARBON' in c.upper()
+        or 'CARBÓN' in c.upper()
+    ]
 
     excluir_cris = set(
-        c_fv_frescos + c_fv_alterados + c_lv_frescos + c_lv_alterados +
+        c_fv + c_lv_frescos + c_lv_alterados +
         c_lt_frescos + c_lt_alterados + c_otros
     )
     c_c = [c for c in cols_conteo if c not in excluir_cris]
 
-    df_temp['Fragmentos de vidrio frescos (FV)'] = df_temp[c_fv_frescos].sum(axis=1) if c_fv_frescos else 0
-    df_temp['Fragmentos de vidrio alterados (FVA)'] = df_temp[c_fv_alterados].sum(axis=1) if c_fv_alterados else 0
+    df_temp['Fragmento de vidrio'] = df_temp[c_fv].sum(axis=1) if c_fv else 0
     df_temp['Líticos volcánicos frescos'] = df_temp[c_lv_frescos].sum(axis=1) if c_lv_frescos else 0
     df_temp['Líticos volcánicos alterados'] = df_temp[c_lv_alterados].sum(axis=1) if c_lv_alterados else 0
     df_temp['Líticos no volcánicos frescos'] = df_temp[c_lt_frescos].sum(axis=1) if c_lt_frescos else 0
@@ -300,7 +319,7 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     df_pct_temp[cols_macro] = df_temp[cols_macro].div(denominador, axis=0) * 100
 
     orden_cat_detallado = (
-        c_fv_frescos + c_fv_alterados + c_c +
+        c_fv + c_c +
         c_lv_frescos + c_lv_alterados +
         c_lt_frescos + c_lt_alterados + c_otros
     )
@@ -421,6 +440,7 @@ def renderizar_cartografia_base(df_mapa, c_lat, c_lon, archivo_geo):
             )
     else:
         m_base = folium.Map(location=[c_lat, c_lon], zoom_start=11, tiles='CartoDB positron')
+        folium.TileLayer('OpenStreetMap', name='OpenStreetMap').add_to(m_base)
         folium.Marker(
             [LAT_CRATER, LON_CRATER], tooltip="Cráter Volcán Puracé",
             icon=folium.Icon(color="red", icon="info-sign")
@@ -429,11 +449,12 @@ def renderizar_cartografia_base(df_mapa, c_lat, c_lon, archivo_geo):
             archivo_geo.seek(0)
             folium.GeoJson(
                 json.load(archivo_geo),
+                name="Veredas",
                 style_function=lambda f: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5}
             ).add_to(m_base)
 
         if "Puntos" in tipo_mapa_base:
-            mc = MarkerCluster().add_to(m_base)
+            mc = MarkerCluster(name="Muestras").add_to(m_base)
             for _, r in df_mapa.iterrows():
                 esp_txt = f"{r['Espesor_Deposito_mm']} mm" if pd.notna(r['Espesor_Deposito_mm']) else "N/A"
                 dist_txt = f"{r['Distancia_Crater_km']} km" if pd.notna(r['Distancia_Crater_km']) else "N/A"
@@ -450,7 +471,7 @@ def renderizar_cartografia_base(df_mapa, c_lat, c_lon, archivo_geo):
             if not h_data.empty:
                 HeatMap(
                     [[r['Latitud'], r['Longitud'], float(r['Espesor_Deposito_mm']) * 2] for _, r in h_data.iterrows()],
-                    radius=25, blur=15
+                    radius=25, blur=15, name="Mapa de Calor"
                 ).add_to(m_base)
                 min_v = float(h_data['Espesor_Deposito_mm'].min())
                 max_v = float(h_data['Espesor_Deposito_mm'].max())
@@ -461,7 +482,9 @@ def renderizar_cartografia_base(df_mapa, c_lat, c_lon, archivo_geo):
                     )
                     colormap.caption = 'Intensidad de Dispersión (Espesor en mm)'
                     m_base.add_child(colormap)
-        st_folium(m_base, width="100%", height=600, key="mapa_base")
+
+        folium.LayerControl().add_to(m_base)
+        components.html(m_base._repr_html_(), height=600)
 
 def renderizar_modulo_espacial(df_fil, archivo_geo, mostrar_predictivos=False):
     try:
@@ -535,6 +558,7 @@ def renderizar_modulo_espacial(df_fil, archivo_geo, mostrar_predictivos=False):
                 buf.close()
 
                 m_geo = folium.Map(location=[c_lat, c_lon], zoom_start=11, tiles='CartoDB positron')
+                folium.TileLayer('OpenStreetMap', name='OpenStreetMap').add_to(m_geo)
                 folium.Marker(
                     [LAT_CRATER, LON_CRATER], tooltip="Cráter Volcán Puracé",
                     icon=folium.Icon(color="red", icon="info-sign")
@@ -542,7 +566,8 @@ def renderizar_modulo_espacial(df_fil, archivo_geo, mostrar_predictivos=False):
                 folium.raster_layers.ImageOverlay(
                     image=img_url,
                     bounds=[[l_lat_min, l_lon_min], [l_lat_max, l_lon_max]],
-                    opacity=0.8
+                    opacity=0.8,
+                    name="Interpolación"
                 ).add_to(m_geo)
                 for _, r in df_mod.iterrows():
                     folium.CircleMarker([r['Latitud'], r['Longitud']], radius=3, color="black", fill=True).add_to(m_geo)
@@ -557,7 +582,9 @@ def renderizar_modulo_espacial(df_fil, archivo_geo, mostrar_predictivos=False):
                     colormap = cm.LinearColormap(colors=colores_cm, vmin=z_min, vmax=z_max)
                     colormap.caption = f"{col_obj} (mm)"
                     m_geo.add_child(colormap)
-                st_folium(m_geo, width="100%", height=600, key="mapa_geo")
+
+                folium.LayerControl().add_to(m_geo)
+                components.html(m_geo._repr_html_(), height=600)
 
         with tab_sim:
             tipo_mapa_sim = st.radio(
@@ -774,7 +801,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
         c1, c2 = st.columns(2)
         with c1:
             df_tp = df_fil.copy()
-            df_tp['Vidrio'] = df_tp['Fragmentos de vidrio frescos (FV)'] + df_tp['Fragmentos de vidrio alterados (FVA)']
+            df_tp['Vidrio'] = df_tp['Fragmento de vidrio']
             df_tp['Líticos'] = (
                 df_tp['Líticos volcánicos frescos'] + df_tp['Líticos volcánicos alterados'] +
                 df_tp['Líticos no volcánicos frescos'] + df_tp['Líticos no volcánicos alterados']
@@ -797,7 +824,7 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
                     title="Clasificación Petrológica (100% Magmático)"
                 )
                 fig_t.update_layout(
-                    ternary=dict(aaxis_title='Vidrio %', baxis_title='Líticos %', caxis_title='Cristales %'),
+                    ternary=dict(aaxis_title='Fragmento de vidrio %', baxis_title='Líticos %', caxis_title='Cristales %'),
                     margin=dict(t=40, b=40, l=40, r=40)
                 )
                 st.plotly_chart(fig_t, use_container_width=True)
@@ -822,11 +849,10 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
         st.subheader("3. Evolución Temporal y Seguimiento")
         if 'Fecha_Recoleccion' in df_fil.columns and not df_fil['Fecha_Recoleccion'].dropna().empty:
             meses_disp = sorted(df_fil['Fecha_Recoleccion'].dt.month.dropna().astype(int).unique())
-            mes_dict = {1: 'Enero', 2: 'Feb', 3: 'Mar', 4: 'Abr', 5: 'May', 6: 'Jun', 7: 'Jul', 8: 'Ago', 9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dic'}
             meses_sel = st.multiselect(
                 "Filtrar por Mes (Aplica a seguimiento temporal):",
                 meses_disp, default=meses_disp,
-                format_func=lambda x: mes_dict.get(x, str(x))
+                format_func=lambda x: MESES_ES.get(x, str(x))
             )
 
             mask_m = df_fil['Fecha_Recoleccion'].dt.month.isin(meses_sel)
@@ -890,28 +916,59 @@ def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c
 def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo, c_cristales, orden_cat_detallado):
     try:
         st.subheader("Análisis Comparativo Multi-Muestra")
-        col_f1, col_f2 = st.columns(2)
+        col_f1, col_f2, col_f3 = st.columns(3)
         with col_f1:
             locs_disponibles = sorted(df_fil['Localizacion'].dropna().astype(str).unique().tolist())
-            filtro_v = st.multiselect("Filtrar opciones por Localización:", locs_disponibles, default=[])
+            filtro_v = st.multiselect("Filtrar por Localización:", locs_disponibles, default=[])
         with col_f2:
             if 'Fecha_Recoleccion' in df_fil.columns and not df_fil['Fecha_Recoleccion'].dropna().empty:
-                fechas_disponibles = sorted(df_fil['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d').dropna().unique().tolist(), reverse=True)
-                filtro_f = st.multiselect("Filtrar opciones por Fecha:", fechas_disponibles, default=[])
+                meses_ym_disp = sorted(
+                    df_fil['Fecha_Recoleccion'].dt.strftime('%Y-%m').dropna().unique().tolist(),
+                    reverse=True
+                )
+                filtro_m = st.multiselect(
+                    "Filtrar por Mes:",
+                    meses_ym_disp,
+                    default=[],
+                    format_func=formatear_anio_mes
+                )
             else:
-                filtro_f = []
+                filtro_m = []
 
         df_opciones = df_fil.copy()
         if filtro_v:
             df_opciones = df_opciones[df_opciones['Localizacion'].isin(filtro_v)]
+        if filtro_m and 'Fecha_Recoleccion' in df_opciones.columns:
+            df_opciones = df_opciones[df_opciones['Fecha_Recoleccion'].dt.strftime('%Y-%m').isin(filtro_m)]
+
+        with col_f3:
+            if 'Fecha_Recoleccion' in df_opciones.columns and not df_opciones['Fecha_Recoleccion'].dropna().empty:
+                fechas_disponibles = sorted(
+                    df_opciones['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d').dropna().unique().tolist(),
+                    reverse=True
+                )
+                filtro_f = st.multiselect("Filtrar por Día específico:", fechas_disponibles, default=[])
+            else:
+                filtro_f = []
+
         if filtro_f and 'Fecha_Recoleccion' in df_opciones.columns:
             df_opciones = df_opciones[df_opciones['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d').isin(filtro_f)]
 
         muestras_disponibles = df_opciones['ID_Muestra'].tolist()
+        usar_todas = st.checkbox(
+            "Seleccionar todas las muestras disponibles en el filtro actual",
+            value=bool(filtro_v or filtro_m or filtro_f)
+        )
+        default_muestras = (
+            muestras_disponibles
+            if usar_todas
+            else (muestras_disponibles[:6] if len(muestras_disponibles) >= 6 else muestras_disponibles)
+        )
+
         muestras_seleccionadas = st.multiselect(
             "Seleccione las muestras a comparar:",
             muestras_disponibles,
-            default=muestras_disponibles[:6] if len(muestras_disponibles) >= 6 else muestras_disponibles
+            default=default_muestras
         )
 
         if not muestras_seleccionadas:
@@ -1164,7 +1221,7 @@ with st.sidebar.expander("Filtros Espaciales Generales"):
         st.session_state["v_sel"] = []
     v_sel = st.multiselect("Localización:", v_unicas, key="v_sel")
 
-with st.sidebar.expander("Filtros Temporales Generales"):
+with st.sidebar.expander("Filtros Temporales Generales (Año y Mes)", expanded=True):
     m_f = pd.Series(True, index=df_bruto.index)
     if 'Fecha_Recoleccion' in df_bruto.columns and not df_bruto['Fecha_Recoleccion'].isnull().all():
         df_bruto['Anio'] = df_bruto['Fecha_Recoleccion'].dt.year
@@ -1177,7 +1234,12 @@ with st.sidebar.expander("Filtros Temporales Generales"):
             if a_sel != "Todos"
             else df_bruto['Mes'].dropna().astype(int).unique()
         )
-        m_sel = st.multiselect("Meses (Aplica a mapas):", meses_unicos, default=meses_unicos)
+        m_sel = st.multiselect(
+            "Meses:",
+            meses_unicos,
+            default=meses_unicos,
+            format_func=lambda x: MESES_ES.get(x, str(x))
+        )
 
         if a_sel != "Todos":
             m_f &= (df_bruto['Anio'] == a_sel)
