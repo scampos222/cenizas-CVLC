@@ -186,7 +186,6 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     if df_temp is None or df_temp.empty:
         return pd.DataFrame(), pd.DataFrame(), [], [], [], []
 
-    # Estandarización de encabezados
     rename_dict = {}
     for c in df_temp.columns:
         cu = str(c).strip().upper()
@@ -213,12 +212,10 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
 
     df_temp.rename(columns=rename_dict, inplace=True)
 
-    # Descartar filas completamente vacías sin ID
     if 'ID_Muestra' in df_temp.columns:
         df_temp = df_temp.dropna(subset=['ID_Muestra']).copy()
         df_temp['ID_Muestra'] = df_temp['ID_Muestra'].astype(str).str.strip()
 
-    # Escudo de columnas base
     columnas_base = [
         'ID_Muestra', 'Localizacion', 'Latitud', 'Longitud',
         'Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'Fecha_Recoleccion',
@@ -228,7 +225,6 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
         if col not in df_temp.columns:
             df_temp[col] = np.nan
 
-    # Normalizar textos de Localizacion para evitar duplicados por mayúsculas
     df_temp['Localizacion'] = (
         df_temp['Localizacion']
         .fillna('Sin Localización')
@@ -239,7 +235,6 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
 
     df_temp['Fecha_Recoleccion'] = pd.to_datetime(df_temp['Fecha_Recoleccion'], errors='coerce')
 
-    # Inicialización segura de tipos (evita LossySetitemError en pandas modernos)
     df_temp['Distancia_Crater_km'] = np.nan
     df_temp['Direccion_Viento'] = pd.Series(index=df_temp.index, dtype="object")
     df_temp['Azimut_Crater'] = np.nan
@@ -271,7 +266,6 @@ def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
     df_temp['Tamaño_Promedio_mm'] = pd.to_numeric(df_temp['Tamaño_Promedio_mm'], errors='coerce')
     df_temp['Espesor_Deposito_mm'] = pd.to_numeric(df_temp['Espesor_Deposito_mm'], errors='coerce')
 
-    # Clasificación en las 8 categorías oficiales
     c_fv_frescos = [c for c in cols_conteo if c.upper().startswith('FV') and not c.upper().startswith('FVA')]
     c_fv_alterados = [c for c in cols_conteo if c.upper().startswith('FVA')]
     c_lv_frescos = [c for c in cols_conteo if c.upper().startswith('LV') and not c.upper().startswith('LVA')]
@@ -395,13 +389,90 @@ def renderizar_kpis(df_fil, cols_macro):
     except Exception as e:
         st.error(f"Error al renderizar resumen: {e}")
 
-def renderizar_modulo_espacial(df_fil, archivo_geo):
+def renderizar_cartografia_base(df_mapa, c_lat, c_lon, archivo_geo):
+    tipo_mapa_base = st.radio(
+        "Capa a visualizar:",
+        ["Puntos (2D)", "Dispersión (2D)", "Vista 3D (Volumen)"],
+        horizontal=True
+    )
+    if "3D" in tipo_mapa_base:
+        df_3d = df_mapa.dropna(subset=['Espesor_Deposito_mm']).copy()
+        df_3d = df_3d[df_3d['Espesor_Deposito_mm'] > 0]
+        if df_3d.empty:
+            st.warning("Sin datos de espesor > 0 para construir la vista 3D.")
+        else:
+            df_3d['Elev_V'] = df_3d['Espesor_Deposito_mm'] * 150
+            capa = pdk.Layer(
+                'ColumnLayer', data=df_3d,
+                get_position='[Longitud, Latitud]', get_elevation='Elev_V',
+                radius=150, get_fill_color='[200, 30, 30, 180]',
+                pickable=True, auto_highlight=True
+            )
+            crater_layer = pdk.Layer(
+                'ScatterplotLayer', data=[{'lat': LAT_CRATER, 'lon': LON_CRATER}],
+                get_position='[lon, lat]', get_color='[255, 0, 0, 255]',
+                get_radius=500, pickable=True
+            )
+            vista = pdk.ViewState(longitude=c_lon, latitude=c_lat, zoom=10.5, pitch=55, bearing=20)
+            st.pydeck_chart(
+                pdk.Deck(layers=[capa, crater_layer], initial_view_state=vista, map_style='dark'),
+                use_container_width=True
+            )
+    else:
+        m_base = folium.Map(location=[c_lat, c_lon], zoom_start=11, tiles='CartoDB positron')
+        folium.Marker(
+            [LAT_CRATER, LON_CRATER], tooltip="Cráter Volcán Puracé",
+            icon=folium.Icon(color="red", icon="info-sign")
+        ).add_to(m_base)
+        if archivo_geo:
+            archivo_geo.seek(0)
+            folium.GeoJson(
+                json.load(archivo_geo),
+                style_function=lambda f: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5}
+            ).add_to(m_base)
+
+        if "Puntos" in tipo_mapa_base:
+            mc = MarkerCluster().add_to(m_base)
+            for _, r in df_mapa.iterrows():
+                esp_txt = f"{r['Espesor_Deposito_mm']} mm" if pd.notna(r['Espesor_Deposito_mm']) else "N/A"
+                dist_txt = f"{r['Distancia_Crater_km']} km" if pd.notna(r['Distancia_Crater_km']) else "N/A"
+                html = f"<b>{r['ID_Muestra']}</b><br>Localización: {r['Localizacion']}<br>Espesor: {esp_txt}<br>Distancia: {dist_txt}"
+                folium.Marker(
+                    [r['Latitud'], r['Longitud']],
+                    popup=folium.Popup(html, max_width=250),
+                    tooltip=str(r['ID_Muestra']),
+                    icon=folium.Icon(color="darkblue", icon="info-sign")
+                ).add_to(mc)
+        elif "Dispersión" in tipo_mapa_base:
+            h_data = df_mapa.dropna(subset=['Espesor_Deposito_mm'])
+            h_data = h_data[h_data['Espesor_Deposito_mm'] > 0]
+            if not h_data.empty:
+                HeatMap(
+                    [[r['Latitud'], r['Longitud'], float(r['Espesor_Deposito_mm']) * 2] for _, r in h_data.iterrows()],
+                    radius=25, blur=15
+                ).add_to(m_base)
+                min_v = float(h_data['Espesor_Deposito_mm'].min())
+                max_v = float(h_data['Espesor_Deposito_mm'].max())
+                if max_v > min_v:
+                    colormap = cm.LinearColormap(
+                        colors=['blue', 'cyan', 'lime', 'yellow', 'red'],
+                        vmin=min_v, vmax=max_v
+                    )
+                    colormap.caption = 'Intensidad de Dispersión (Espesor en mm)'
+                    m_base.add_child(colormap)
+        st_folium(m_base, width="100%", height=600, key="mapa_base")
+
+def renderizar_modulo_espacial(df_fil, archivo_geo, mostrar_predictivos=False):
     try:
-        st.subheader("Análisis Geoespacial y Predictivo")
+        st.subheader("Análisis Geoespacial")
         df_mapa = df_fil.dropna(subset=['Latitud', 'Longitud']).copy()
         if df_mapa.empty:
             return st.warning("No hay datos con coordenadas válidas para generar los mapas.")
         c_lat, c_lon = df_mapa['Latitud'].mean(), df_mapa['Longitud'].mean()
+
+        if not mostrar_predictivos:
+            renderizar_cartografia_base(df_mapa, c_lat, c_lon, archivo_geo)
+            return
 
         tab_base, tab_geo, tab_sim = st.tabs([
             "Cartografía Base",
@@ -410,77 +481,7 @@ def renderizar_modulo_espacial(df_fil, archivo_geo):
         ])
 
         with tab_base:
-            tipo_mapa_base = st.radio(
-                "Capa a visualizar:",
-                ["Puntos (2D)", "Dispersión (2D)", "Vista 3D (Volumen)"],
-                horizontal=True
-            )
-            if "3D" in tipo_mapa_base:
-                df_3d = df_mapa.dropna(subset=['Espesor_Deposito_mm']).copy()
-                df_3d = df_3d[df_3d['Espesor_Deposito_mm'] > 0]
-                if df_3d.empty:
-                    st.warning("Sin datos de espesor > 0 para construir la vista 3D.")
-                else:
-                    df_3d['Elev_V'] = df_3d['Espesor_Deposito_mm'] * 150
-                    capa = pdk.Layer(
-                        'ColumnLayer', data=df_3d,
-                        get_position='[Longitud, Latitud]', get_elevation='Elev_V',
-                        radius=150, get_fill_color='[200, 30, 30, 180]',
-                        pickable=True, auto_highlight=True
-                    )
-                    crater_layer = pdk.Layer(
-                        'ScatterplotLayer', data=[{'lat': LAT_CRATER, 'lon': LON_CRATER}],
-                        get_position='[lon, lat]', get_color='[255, 0, 0, 255]',
-                        get_radius=500, pickable=True
-                    )
-                    vista = pdk.ViewState(longitude=c_lon, latitude=c_lat, zoom=10.5, pitch=55, bearing=20)
-                    st.pydeck_chart(
-                        pdk.Deck(layers=[capa, crater_layer], initial_view_state=vista, map_style='dark'),
-                        use_container_width=True
-                    )
-            else:
-                m_base = folium.Map(location=[c_lat, c_lon], zoom_start=11, tiles='CartoDB positron')
-                folium.Marker(
-                    [LAT_CRATER, LON_CRATER], tooltip="Cráter Volcán Puracé",
-                    icon=folium.Icon(color="red", icon="info-sign")
-                ).add_to(m_base)
-                if archivo_geo:
-                    archivo_geo.seek(0)
-                    folium.GeoJson(
-                        json.load(archivo_geo),
-                        style_function=lambda f: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5}
-                    ).add_to(m_base)
-
-                if "Puntos" in tipo_mapa_base:
-                    mc = MarkerCluster().add_to(m_base)
-                    for _, r in df_mapa.iterrows():
-                        esp_txt = f"{r['Espesor_Deposito_mm']} mm" if pd.notna(r['Espesor_Deposito_mm']) else "N/A"
-                        dist_txt = f"{r['Distancia_Crater_km']} km" if pd.notna(r['Distancia_Crater_km']) else "N/A"
-                        html = f"<b>{r['ID_Muestra']}</b><br>Localización: {r['Localizacion']}<br>Espesor: {esp_txt}<br>Distancia: {dist_txt}"
-                        folium.Marker(
-                            [r['Latitud'], r['Longitud']],
-                            popup=folium.Popup(html, max_width=250),
-                            tooltip=str(r['ID_Muestra']),
-                            icon=folium.Icon(color="darkblue", icon="info-sign")
-                        ).add_to(mc)
-                elif "Dispersión" in tipo_mapa_base:
-                    h_data = df_mapa.dropna(subset=['Espesor_Deposito_mm'])
-                    h_data = h_data[h_data['Espesor_Deposito_mm'] > 0]
-                    if not h_data.empty:
-                        HeatMap(
-                            [[r['Latitud'], r['Longitud'], float(r['Espesor_Deposito_mm']) * 2] for _, r in h_data.iterrows()],
-                            radius=25, blur=15
-                        ).add_to(m_base)
-                        min_v = float(h_data['Espesor_Deposito_mm'].min())
-                        max_v = float(h_data['Espesor_Deposito_mm'].max())
-                        if max_v > min_v:
-                            colormap = cm.LinearColormap(
-                                colors=['blue', 'cyan', 'lime', 'yellow', 'red'],
-                                vmin=min_v, vmax=max_v
-                            )
-                            colormap.caption = 'Intensidad de Dispersión (Espesor en mm)'
-                            m_base.add_child(colormap)
-                st_folium(m_base, width="100%", height=600, key="mapa_base")
+            renderizar_cartografia_base(df_mapa, c_lat, c_lon, archivo_geo)
 
         with tab_geo:
             tipo_mapa_geo = st.radio(
@@ -916,8 +917,6 @@ def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo, c
             return st.info("Seleccione al menos una muestra para iniciar la comparativa.")
 
         st.markdown("---")
-        st.subheader("Variación Composicional (% Componentes)")
-
         nivel_detalle = st.radio(
             "Nivel de Análisis:",
             [
@@ -933,45 +932,100 @@ def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo, c
         if c_cristales:
             df_cris[c_cristales] = df_cris[c_cristales].div(df_cris[c_cristales].sum(axis=1).replace(0, 1), axis=0) * 100
 
-        if "Macro" in nivel_detalle:
-            df_melted = df_comp_pct.melt(id_vars=['ID_Muestra'], value_vars=cols_macro, var_name='Componente', value_name='Porcentaje')
-            df_melted = df_melted[df_melted['Porcentaje'] > 0]
-            fig_bar = px.bar(
-                df_melted, x="ID_Muestra", y="Porcentaje", color="Componente",
-                color_discrete_map=color_map_paper, barmode="stack",
-                category_orders={"Componente": ORDEN_APILADO_MACRO, "ID_Muestra": muestras_seleccionadas}
-            )
-            legend_t = "<b>Componente</b>"
-        elif "% Cristal" in nivel_detalle:
-            df_melted = df_cris.melt(id_vars=['ID_Muestra'], value_vars=c_cristales, var_name='Componente', value_name='Porcentaje')
-            df_melted = df_melted[df_melted['Porcentaje'] > 0]
-            fig_bar = px.bar(
-                df_melted, x="ID_Muestra", y="Porcentaje", color="Componente",
-                barmode="stack", color_discrete_sequence=colores_profesionales,
-                category_orders={"ID_Muestra": muestras_seleccionadas}
-            )
-            legend_t = "<b>Cristal</b>"
-        else:
-            df_melted = df_comp_pct.melt(id_vars=['ID_Muestra'], value_vars=cols_conteo, var_name='Componente', value_name='Porcentaje')
-            df_melted = df_melted[df_melted['Porcentaje'] > 0]
-            fig_bar = px.bar(
-                df_melted, x="ID_Muestra", y="Porcentaje", color="Componente",
-                barmode="stack", color_discrete_sequence=px.colors.qualitative.Pastel,
-                category_orders={"Componente": orden_cat_detallado, "ID_Muestra": muestras_seleccionadas}
-            )
-            legend_t = "<b>Subcategoría</b>"
+        tab_barras, tab_tortas = st.tabs(["Barras Apiladas (Serie)", "Tortas Comparativas (Mosaico)"])
 
-        fig_bar.update_traces(
-            hovertemplate='<b>%{x}</b><br>%{data.name}: %{y:.1f}%<extra></extra>',
-            marker_line_color='black', marker_line_width=0.8, width=0.3
-        )
-        fig_bar.update_layout(
-            height=600, margin=dict(t=30, b=100),
-            yaxis=dict(title="<b>Porcentaje (%)</b>", range=[0, 100], dtick=10, showgrid=True, gridcolor='lightgray'),
-            xaxis=dict(title="", tickangle=-90, showline=True, linecolor='black'),
-            plot_bgcolor='white', paper_bgcolor='white', legend_title=legend_t
-        )
-        st.plotly_chart(fig_bar, use_container_width=True)
+        with tab_barras:
+            if "Macro" in nivel_detalle:
+                df_melted = df_comp_pct.melt(id_vars=['ID_Muestra'], value_vars=cols_macro, var_name='Componente', value_name='Porcentaje')
+                df_melted = df_melted[df_melted['Porcentaje'] > 0]
+                fig_bar = px.bar(
+                    df_melted, x="ID_Muestra", y="Porcentaje", color="Componente",
+                    color_discrete_map=color_map_paper, barmode="stack",
+                    category_orders={"Componente": ORDEN_APILADO_MACRO, "ID_Muestra": muestras_seleccionadas}
+                )
+                legend_t = "<b>Componente</b>"
+            elif "% Cristal" in nivel_detalle:
+                df_melted = df_cris.melt(id_vars=['ID_Muestra'], value_vars=c_cristales, var_name='Componente', value_name='Porcentaje')
+                df_melted = df_melted[df_melted['Porcentaje'] > 0]
+                fig_bar = px.bar(
+                    df_melted, x="ID_Muestra", y="Porcentaje", color="Componente",
+                    barmode="stack", color_discrete_sequence=colores_profesionales,
+                    category_orders={"ID_Muestra": muestras_seleccionadas}
+                )
+                legend_t = "<b>Cristal</b>"
+            else:
+                df_melted = df_comp_pct.melt(id_vars=['ID_Muestra'], value_vars=cols_conteo, var_name='Componente', value_name='Porcentaje')
+                df_melted = df_melted[df_melted['Porcentaje'] > 0]
+                fig_bar = px.bar(
+                    df_melted, x="ID_Muestra", y="Porcentaje", color="Componente",
+                    barmode="stack", color_discrete_sequence=px.colors.qualitative.Pastel,
+                    category_orders={"Componente": orden_cat_detallado, "ID_Muestra": muestras_seleccionadas}
+                )
+                legend_t = "<b>Subcategoría</b>"
+
+            fig_bar.update_traces(
+                hovertemplate='<b>%{x}</b><br>%{data.name}: %{y:.1f}%<extra></extra>',
+                marker_line_color='black', marker_line_width=0.8, width=0.3
+            )
+            fig_bar.update_layout(
+                height=600, margin=dict(t=30, b=100),
+                yaxis=dict(title="<b>Porcentaje (%)</b>", range=[0, 100], dtick=10, showgrid=True, gridcolor='lightgray'),
+                xaxis=dict(title="", tickangle=-90, showline=True, linecolor='black'),
+                plot_bgcolor='white', paper_bgcolor='white', legend_title=legend_t
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+        with tab_tortas:
+            n_cols = 3
+            for i in range(0, len(muestras_seleccionadas), n_cols):
+                cols_grid = st.columns(n_cols)
+                lote = muestras_seleccionadas[i:i + n_cols]
+                for col_ui, m_id in zip(cols_grid, lote):
+                    with col_ui:
+                        if "Macro" in nivel_detalle:
+                            serie = df_comp_pct[df_comp_pct['ID_Muestra'] == m_id][cols_macro].iloc[0]
+                            cmap_torta = color_map_paper
+                            seq_torta = None
+                        elif "% Cristal" in nivel_detalle:
+                            serie = df_cris[df_cris['ID_Muestra'] == m_id][c_cristales].iloc[0]
+                            cmap_torta = None
+                            seq_torta = colores_profesionales
+                        else:
+                            serie = df_comp_pct[df_comp_pct['ID_Muestra'] == m_id][cols_conteo].iloc[0]
+                            cmap_torta = None
+                            seq_torta = px.colors.qualitative.Pastel
+
+                        df_t = serie[serie > 0].reset_index()
+                        df_t.columns = ["Componente", "Porcentaje"]
+
+                        fila_meta = df_fil[df_fil['ID_Muestra'] == m_id].iloc[0]
+                        f_str = (
+                            pd.to_datetime(fila_meta['Fecha_Recoleccion']).strftime('%Y-%m-%d')
+                            if pd.notna(fila_meta.get('Fecha_Recoleccion')) else "Sin fecha"
+                        )
+                        titulo_torta = f"<b>{m_id}</b><br><sup style='color:#555'>{fila_meta['Localizacion']} ({f_str})</sup>"
+
+                        if not df_t.empty:
+                            fig_pie = px.pie(
+                                df_t, names="Componente", values="Porcentaje", hole=0.35,
+                                color="Componente",
+                                color_discrete_map=cmap_torta,
+                                color_discrete_sequence=seq_torta,
+                                title=titulo_torta
+                            )
+                            fig_pie.update_traces(
+                                textposition="inside", textinfo="percent",
+                                marker=dict(line=dict(color='black', width=0.6)),
+                                hovertemplate='<b>%{label}</b>: %{value:.1f}%<extra></extra>'
+                            )
+                            fig_pie.update_layout(
+                                height=340,
+                                margin=dict(t=55, b=10, l=10, r=10),
+                                legend=dict(orientation="h", yanchor="top", y=-0.05, xanchor="center", x=0.5, font=dict(size=10))
+                            )
+                            st.plotly_chart(fig_pie, use_container_width=True, key=f"pie_comp_{m_id}_{nivel_detalle}")
+                        else:
+                            st.info(f"{m_id}: sin datos para este nivel.")
 
         st.markdown("---")
         st.subheader("Comparativa Físico-Espacial")
@@ -1060,6 +1114,13 @@ with st.sidebar.expander("Carga de Datos y Conexiones", expanded=not usar_sql):
     a_geo = st.file_uploader("Capa Veredas (.geojson)", type=["geojson", "json"])
     fotos_subidas = st.file_uploader("Subir Fotos Locales (Multiselección)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
+with st.sidebar.expander("Configuración de Interfaz", expanded=False):
+    mostrar_predictivos = st.checkbox(
+        "Mostrar Modelos Geoestadísticos y Predictivos",
+        value=False,
+        help="Activa o desactiva las pestañas de Isopacas, Isopletas, Animación Temporal y Random Forest."
+    )
+
 df_bruto, df_pct_bruto, c_conteo, c_macro, c_cristales, orden_cat_detallado = cargar_y_limpiar_datos(a_sub, url_gs, usar_sql)
 
 if df_bruto.empty:
@@ -1072,7 +1133,6 @@ with st.sidebar.expander("Filtros Espaciales Generales"):
     if "v_sel" not in st.session_state:
         st.session_state["v_sel"] = v_unicas
     else:
-        # Sincronizar selección si cambia el archivo cargado
         st.session_state["v_sel"] = [v for v in st.session_state["v_sel"] if v in v_unicas] or v_unicas
 
     col1, col2 = st.columns(2)
@@ -1117,7 +1177,7 @@ else:
     ])
 
     with t_espacial:
-        renderizar_modulo_espacial(df_fil, a_geo)
+        renderizar_modulo_espacial(df_fil, a_geo, mostrar_predictivos=mostrar_predictivos)
     with t_laboratorio:
         renderizar_modulo_laboratorio(df_fil, df_pct_fil, c_conteo, c_macro, c_cristales, fotos_subidas)
     with t_comparativo:
