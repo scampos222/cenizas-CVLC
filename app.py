@@ -8,8 +8,6 @@ from streamlit_folium import st_folium
 import re
 import json
 import pydeck as pdk
-import os
-from urllib.parse import unquote, urlparse
 import numpy as np
 from scipy.interpolate import griddata, Rbf
 import matplotlib.pyplot as plt
@@ -17,6 +15,7 @@ import io
 import base64
 import math
 import requests
+import branca.colormap as cm
 
 try:
     from sklearn.ensemble import RandomForestRegressor
@@ -35,8 +34,6 @@ try:
     KRIGING_DISPONIBLE = True
 except ImportError:
     KRIGING_DISPONIBLE = False
-
-import branca.colormap as cm
 
 # ==========================================
 # 1. CONFIGURACIÓN Y CONSTANTES
@@ -69,733 +66,57 @@ color_map_paper = {
     "Otros": "#2980B9"
 }
 
+ORDEN_APILADO_MACRO = [
+    "Fragmentos vesiculados frescos",
+    "Fragmentos vesiculados alterados",
+    "Cristales",
+    "Líticos volcánicos frescos",
+    "Líticos volcánicos alterados",
+    "Líticos no volcánicos frescos",
+    "Líticos no volcánicos alterados",
+    "Otros"
+]
+
 colores_profesionales = px.colors.qualitative.Pastel
 LAT_CRATER = 2.313377
 LON_CRATER = -76.395088
-DIRECCIONES_BRUJULA = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
+DIRECCIONES_BRUJULA = [
+    'N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+    'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'
+]
 
 # ==========================================
 # 2. FUNCIONES MATEMÁTICAS Y AUXILIARES
 # ==========================================
 def limpiar_coordenada(valor):
-    if pd.isna(valor): return np.nan
+    if pd.isna(valor):
+        return np.nan
     val_str = str(valor).strip().upper().replace(',', '.')
-    try: return float(val_str)
-    except ValueError: pass
+    try:
+        return float(val_str)
+    except ValueError:
+        pass
     numeros = re.findall(r"[\d\.]+", val_str)
-    if not numeros: return np.nan
+    if not numeros:
+        return np.nan
     dec = float(numeros[0])
-    if len(numeros) > 1: dec += float(numeros[1]) / 60.0
-    if len(numeros) > 2: dec += float(numeros[2]) / 3600.0
-    if '-' in val_str or 'S' in val_str or 'W' in val_str or 'O' in val_str: dec = -dec
+    if len(numeros) > 1:
+        dec += float(numeros[1]) / 60.0
+    if len(numeros) > 2:
+        dec += float(numeros[2]) / 3600.0
+    if any(signo in val_str for signo in ['-', 'S', 'W', 'O']):
+        dec = -dec
     return dec
 
 def operaciones_geoespaciales_vectorizadas(lats, lons):
-    R = 6371.0 
-    lat1, lon1, lat2, lon2 = map(np.radians, [LAT_CRATER, LON_CRATER, lats, lons])
+    R = 6371.0
+    lat1, lon1 = np.radians(LAT_CRATER), np.radians(LON_CRATER)
+    lat2, lon2 = np.radians(lats.astype(float)), np.radians(lons.astype(float))
     dlat = lat2 - lat1
     dlon = lon2 - lon1
-    a = np.sin(dlat/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2)**2
-    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
     distancias = np.round(R * c, 2)
-    
+
     x = np.sin(dlon) * np.cos(lat2)
-    y = np.cos(lat1) * np.sin(lat2) - (np.sin(lat1) * np.cos(lat2) * np.cos(dlon))
-    initial_bearing = np.arctan2(x, y)
-    azimuts = (np.degrees(initial_bearing) + 360) % 360
-    
-    dirs = np.array(DIRECCIONES_BRUJULA)
-    ix = np.round(azimuts / (360. / len(dirs))).astype(int)
-    direcciones = dirs[ix % len(dirs)]
-    return distancias, direcciones, azimuts
-
-@st.cache_data(ttl=600, show_spinner=False)
-def obtener_clima_crater_actual():
-    try:
-        url = f"https://api.open-meteo.com/v1/forecast?latitude={LAT_CRATER}&longitude={LON_CRATER}&current=wind_speed_10m,wind_direction_10m"
-        r = requests.get(url, timeout=5)
-        if r.status_code == 200:
-            data = r.json()['current']
-            dirs = DIRECCIONES_BRUJULA
-            ix = int(round(data['wind_direction_10m'] / (360. / len(dirs))))
-            return data['wind_speed_10m'], dirs[ix % len(dirs)]
-    except: return None, None
-    return None, None
-
-def obtener_url_imagen(url_original):
-    url_limpia = str(url_original).strip()
-    if "|" in url_limpia: url_limpia = url_limpia.split("|")[1].strip()
-    if "drive.google.com" in url_limpia:
-        match = re.search(r'[-\w]{25,}', url_limpia)
-        if match: return f"https://lh3.googleusercontent.com/d/{match.group(0)}"
-    return url_limpia
-
-# ==========================================
-# 3. MOTOR DE DATOS BLINDADO
-# ==========================================
-@st.cache_data(show_spinner="Procesando base de datos...")
-def cargar_y_limpiar_datos(archivo, url_gs, usar_sql=False):
-    df_temp = None
-    if usar_sql:
-        try:
-            conn = st.connection("sql")
-            df_temp = conn.query("SELECT * FROM muestras_ceniza;", ttl="10m")
-        except Exception: pass
-    
-    if df_temp is None:
-        if archivo is not None: df_temp = pd.read_csv(archivo) if archivo.name.endswith('.csv') else pd.read_excel(archivo)
-        elif url_gs:
-            try:
-                match = re.search(r'/d/([a-zA-Z0-9-_]+)', url_gs)
-                if match: df_temp = pd.read_csv(f"https://docs.google.com/spreadsheets/d/{match.group(1)}/export?format=csv")
-            except Exception: pass 
-            
-    if df_temp is None or df_temp.empty: return pd.DataFrame(), pd.DataFrame(), [], [], [], []
-
-    rename_dict = {}
-    for c in df_temp.columns:
-        cu = str(c).strip().upper()
-        if cu in ['LAT', 'LATITUD']: rename_dict[c] = 'Latitud'
-        elif cu in ['LON', 'LONGITUD', 'LNG']: rename_dict[c] = 'Longitud'
-        elif cu in ['FECHA', 'DATE', 'FECHA_RECOLECCION']: rename_dict[c] = 'Fecha_Recoleccion'
-        elif cu in ['TAMAÑO', 'TAMANO', 'TAMAÑO_PROMEDIO_MM']: rename_dict[c] = 'Tamaño_Promedio_mm'
-        elif cu in ['ESPESOR', 'ESPESOR_DEPOSITO_MM']: rename_dict[c] = 'Espesor_Deposito_mm'
-        elif cu in ['LOCALIDAD', 'VEREDA', 'LOCALIZACION']: rename_dict[c] = 'Localizacion'
-        elif cu in ['MUESTRA', 'ID', 'ID_MUESTRA']: rename_dict[c] = 'ID_Muestra'
-        elif cu in ['FOTOS', 'URLS_FOTOS']: rename_dict[c] = 'URLs_Fotos'
-        elif cu in ['REPORTE', 'ENLACE_REPORTE']: rename_dict[c] = 'Enlace_Reporte'
-        elif cu in ['TOTAL', 'TOTAL_GRANOS']: rename_dict[c] = 'Total_Granos_Excel'
-    
-    df_temp.rename(columns=rename_dict, inplace=True)
-    
-    # --- ESCUDO DE DATOS FALTANTES ---
-    # Garantiza que las columnas existan aunque el Excel subido sea solo de conteos
-    columnas_base = ['ID_Muestra', 'Localizacion', 'Latitud', 'Longitud', 'Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'Fecha_Recoleccion', 'URLs_Fotos', 'URL_Microscopio', 'Enlace_Reporte', 'Total_Granos_Excel']
-    for col in columnas_base:
-        if col not in df_temp.columns:
-            df_temp[col] = np.nan
-            
-    if 'Fecha_Recoleccion' in df_temp.columns:
-        df_temp['Fecha_Recoleccion'] = pd.to_datetime(df_temp['Fecha_Recoleccion'], errors='coerce')
-
-    df_temp['Distancia_Crater_km'] = np.nan
-    df_temp['Direccion_Viento'] = np.nan
-    df_temp['Azimut_Crater'] = np.nan
-    
-    # Coordenadas y cálculos espaciales solo si hay datos válidos
-    if not df_temp[['Latitud', 'Longitud']].dropna().empty:
-        df_temp['Latitud'] = df_temp['Latitud'].apply(limpiar_coordenada)
-        df_temp['Longitud'] = df_temp['Longitud'].apply(limpiar_coordenada)
-        
-        mask = df_temp['Latitud'].notna() & df_temp['Longitud'].notna()
-        if mask.any():
-            distancias, direcciones, azimuts = operaciones_geoespaciales_vectorizadas(df_temp.loc[mask, 'Latitud'].values, df_temp.loc[mask, 'Longitud'].values)
-            df_temp.loc[mask, 'Distancia_Crater_km'] = distancias
-            df_temp.loc[mask, 'Direccion_Viento'] = direcciones
-            df_temp.loc[mask, 'Azimut_Crater'] = azimuts
-
-    cols_info = ['ID_Muestra', 'Localizacion', 'Latitud', 'Longitud', 'Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 
-                 'URLs_Fotos', 'URL_Microscopio', 'Fecha_Recoleccion', 'Enlace_Reporte', 'Direccion_Viento', 
-                 'Distancia_Crater_km', 'Azimut_Crater', 'Total_Granos_Excel']
-    
-    cols_conteo = [col for col in df_temp.columns if col not in cols_info]
-    for col in cols_conteo + ['Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'Distancia_Crater_km']:
-        df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce').fillna(0)
-
-    # CLASIFICACIÓN MACRO EN CATEGORÍAS INSTITUCIONALES
-    c_fv_frescos = [c for c in cols_conteo if c.upper().startswith('FV') and not c.upper().startswith('FVA')]
-    c_fv_alterados = [c for c in cols_conteo if c.upper().startswith('FVA')]
-    c_lv_frescos = [c for c in cols_conteo if c.upper().startswith('LV') and not c.upper().startswith('LVA')]
-    c_lv_alterados = [c for c in cols_conteo if c.upper().startswith('LVA') or c.upper() == 'LI_ALT']
-    c_lt_frescos = [c for c in cols_conteo if c.upper().startswith('LT') and not c.upper().startswith('LTA')]
-    c_lt_alterados = [c for c in cols_conteo if c.upper().startswith('LTA')]
-    c_otros = [c for c in cols_conteo if c.upper() == 'OTROS' or c.upper().startswith('UNNAMED')]
-    
-    c_c = [c for c in cols_conteo if c not in c_fv_frescos + c_fv_alterados + c_lv_frescos + c_lv_alterados + c_lt_frescos + c_lt_alterados + c_otros]
-
-    df_temp['Fragmentos vesiculados frescos'] = df_temp[c_fv_frescos].sum(axis=1) if c_fv_frescos else 0
-    df_temp['Fragmentos vesiculados alterados'] = df_temp[c_fv_alterados].sum(axis=1) if c_fv_alterados else 0
-    df_temp['Líticos volcánicos frescos'] = df_temp[c_lv_frescos].sum(axis=1) if c_lv_frescos else 0
-    df_temp['Líticos volcánicos alterados'] = df_temp[c_lv_alterados].sum(axis=1) if c_lv_alterados else 0
-    df_temp['Líticos no volcánicos frescos'] = df_temp[c_lt_frescos].sum(axis=1) if c_lt_frescos else 0
-    df_temp['Líticos no volcánicos alterados'] = df_temp[c_lt_alterados].sum(axis=1) if c_lt_alterados else 0
-    df_temp['Cristales'] = df_temp[c_c].sum(axis=1) if c_c else 0
-    df_temp['Otros'] = df_temp[c_otros].sum(axis=1) if c_otros else 0
-    
-    cols_macro = [
-        "Fragmentos vesiculados frescos", "Fragmentos vesiculados alterados", "Cristales",
-        "Líticos volcánicos frescos", "Líticos volcánicos alterados", 
-        "Líticos no volcánicos frescos", "Líticos no volcánicos alterados", "Otros"
-    ]
-    
-    df_temp['Total_Granos_Calc'] = df_temp[cols_macro].sum(axis=1)
-    
-    df_pct_temp = df_temp.copy()
-    if not df_temp[cols_macro].empty:
-        df_pct_temp[cols_conteo] = df_temp[cols_conteo].div(df_temp['Total_Granos_Calc'].replace(0, 1), axis=0) * 100
-        df_pct_temp[cols_macro] = df_temp[cols_macro].div(df_temp['Total_Granos_Calc'].replace(0, 1), axis=0) * 100
-
-    orden_cat_detallado = c_fv_frescos + c_fv_alterados + c_c + c_lv_frescos + c_lv_alterados + c_lt_frescos + c_lt_alterados + c_otros
-
-    return df_temp, df_pct_temp, cols_conteo, cols_macro, c_c, orden_cat_detallado
-
-@st.cache_data(show_spinner="Interpolando modelos espaciales...")
-def calcular_modelo_espacial(lon, lat, z, metodo_interp, resolucion):
-    margen_lon, margen_lat = (lon.max() - lon.min()) * 0.2 if lon.max() != lon.min() else 0.05, (lat.max() - lat.min()) * 0.2 if lat.max() != lat.min() else 0.05
-    lim_lon_min, lim_lon_max = lon.min() - margen_lon, lon.max() + margen_lon
-    lim_lat_min, lim_lat_max = lat.min() - margen_lat, lat.max() + margen_lat
-    
-    grid_lon, grid_lat = np.mgrid[lim_lon_min:lim_lon_max:complex(0, resolucion), lim_lat_min:lim_lat_max:complex(0, resolucion)]
-    
-    if "Kriging" in metodo_interp and KRIGING_DISPONIBLE:
-        try:
-            OK = OrdinaryKriging(lon, lat, z, variogram_model='spherical', nlags=6)
-            z_krig, _ = OK.execute('grid', grid_lon[:,0], grid_lat[0,:])
-            grid_z = z_krig.T
-        except: grid_z = griddata((lon, lat), z, (grid_lon, grid_lat), method='linear')
-    elif "RBF" in metodo_interp:
-        rbf_func = Rbf(lon, lat, z, function='multiquadric', smooth=0.1)
-        grid_z = rbf_func(grid_lon, grid_lat)
-    elif "Cúbica" in metodo_interp:
-        try: grid_z = griddata((lon, lat), z, (grid_lon, grid_lat), method='cubic')
-        except: grid_z = griddata((lon, lat), z, (grid_lon, grid_lat), method='linear')
-    else: grid_z = griddata((lon, lat), z, (grid_lon, grid_lat), method='linear')
-    
-    grid_z = np.clip(grid_z, 0, z.max() * 1.2)
-    return grid_lon, grid_lat, grid_z, lim_lon_min, lim_lon_max, lim_lat_min, lim_lat_max
-
-def calcular_volumen_integracion_2d(grid_lon, grid_lat, grid_z, c_lat):
-    d_lon = abs(grid_lon[1,0] - grid_lon[0,0])
-    d_lat = abs(grid_lat[0,1] - grid_lat[0,0])
-    area_celda_km2 = (d_lon * 111.32) * (d_lat * 111.32 * math.cos(math.radians(c_lat)))
-    volumen_km3 = np.sum(grid_z[grid_z > 0.1] * 1e-6 * area_celda_km2)
-    
-    if volumen_km3 < 0.0001: vei = 1
-    elif volumen_km3 < 0.001: vei = 2
-    elif volumen_km3 < 0.01: vei = 3
-    elif volumen_km3 < 0.1: vei = 4
-    elif volumen_km3 < 1: vei = 5
-    else: vei = "6+"
-    
-    return volumen_km3, vei
-
-# ==========================================
-# 4. MÓDULOS MACRO-PESTAÑAS
-# ==========================================
-
-def renderizar_kpis(df_fil, cols_macro):
-    try:
-        m_count = len(df_fil)
-        max_esp = df_fil['Espesor_Deposito_mm'].max() if 'Espesor_Deposito_mm' in df_fil.columns else 0
-        
-        cols_dom = [c for c in cols_macro if c != 'Otros']
-        min_dom = df_fil[cols_dom].sum().idxmax() if not df_fil.empty else "N/A"
-        dir_dom = df_fil['Direccion_Viento'].mode()[0] if 'Direccion_Viento' in df_fil.columns and not df_fil['Direccion_Viento'].empty else "N/A"
-        
-        st.info(f"**Resumen Analítico:** Se analizaron **{m_count} muestras** con un espesor máximo de **{max_esp} mm**. La dispersión predominante indica un transporte de ceniza hacia el **{dir_dom}**. Mineralógicamente, el depósito está dominado por **{min_dom}**.")
-
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Muestras Analizadas", m_count)
-        k2.metric("Espesor Máximo (mm)", max_esp)
-        k3.metric("Componente Dominante", min_dom)
-        k4.metric("Dispersión Predominante", dir_dom)
-        st.markdown("---")
-    except Exception as e: st.error(f"Error al renderizar resumen: {e}")
-
-def renderizar_modulo_espacial(df_fil, archivo_geo):
-    try:
-        st.subheader("Análisis Geoespacial y Predictivo")
-        df_mapa = df_fil.dropna(subset=['Latitud', 'Longitud']).copy()
-        if df_mapa.empty: return st.warning("No hay suficientes datos con coordenadas válidas para generar los mapas.")
-        c_lat, c_lon = df_mapa['Latitud'].mean(), df_mapa['Longitud'].mean()
-
-        tab_base, tab_geo, tab_sim = st.tabs(["Cartografía Base", "Modelos Geostadísticos", "Modelado Predictivo y Temporal"])
-        
-        with tab_base:
-            tipo_mapa_base = st.radio("Capa a visualizar:", ["Puntos (2D)", "Dispersión (2D)", "Vista 3D (Volumen)"], horizontal=True)
-            if "3D" in tipo_mapa_base:
-                df_3d = df_mapa.dropna(subset=['Espesor_Deposito_mm']).copy()
-                if df_3d.empty: st.warning("Sin datos para construir 3D.")
-                else:
-                    df_3d['Elev_V'] = df_3d['Espesor_Deposito_mm'] * 150 
-                    capa = pdk.Layer('ColumnLayer', data=df_3d, get_position='[Longitud, Latitud]', get_elevation='Elev_V', radius=150, get_fill_color='[200, 30, 30, 180]', pickable=True, auto_highlight=True)
-                    crater_layer = pdk.Layer('ScatterplotLayer', data=[{'lat': LAT_CRATER, 'lon': LON_CRATER}], get_position='[lon, lat]', get_color='[255, 0, 0, 255]', get_radius=500, pickable=True)
-                    vista = pdk.ViewState(longitude=c_lon, latitude=c_lat, zoom=10.5, pitch=55, bearing=20)
-                    st.pydeck_chart(pdk.Deck(layers=[capa, crater_layer], initial_view_state=vista, map_style='dark'), use_container_width=True)
-            else:
-                m_base = folium.Map(location=[c_lat, c_lon], zoom_start=11, tiles='CartoDB positron')
-                folium.Marker([LAT_CRATER, LON_CRATER], tooltip="Cráter Volcán Puracé", icon=folium.Icon(color="red", icon="info-sign")).add_to(m_base)
-                if archivo_geo: folium.GeoJson(json.load(archivo_geo), style_function=lambda f: {'fillColor': '#2980B9', 'color': '#2C3E50', 'weight': 1.5}).add_to(m_base)
-                
-                if "Puntos" in tipo_mapa_base:
-                    mc = MarkerCluster().add_to(m_base)
-                    for _, r in df_mapa.iterrows():
-                        html = f"<b>{r.get('ID_Muestra', 'N/A')}</b><br>Espesor: {r.get('Espesor_Deposito_mm', 0)} mm<br>Distancia: {r.get('Distancia_Crater_km', 0)} km"
-                        folium.Marker([r['Latitud'], r['Longitud']], popup=folium.Popup(html, max_width=250), tooltip=str(r.get('ID_Muestra', '')), icon=folium.Icon(color="darkblue", icon="info-sign")).add_to(mc)
-                elif "Dispersión" in tipo_mapa_base:
-                    h_data = df_mapa.dropna(subset=['Espesor_Deposito_mm'])
-                    if not h_data.empty:
-                        HeatMap([[r['Latitud'], r['Longitud'], r['Espesor_Deposito_mm']*2] for _, r in h_data.iterrows()], radius=25, blur=15).add_to(m_base)
-                        min_v, max_v = float(h_data['Espesor_Deposito_mm'].min()), float(h_data['Espesor_Deposito_mm'].max())
-                        colormap = cm.LinearColormap(colors=['blue', 'cyan', 'lime', 'yellow', 'red'], vmin=min_v, vmax=max_v)
-                        colormap.caption = 'Intensidad de Dispersión (Espesor en mm)'
-                        m_base.add_child(colormap)
-                st_folium(m_base, width="100%", height=600, key="mapa_base")
-
-        with tab_geo:
-            tipo_mapa_geo = st.radio("Modelo Matemático:", ["Isopacas (Espesor)", "Isopletas (Tamaño)"], horizontal=True)
-            with st.expander("Parámetros de Interpolación Geostadística"):
-                algos = ["RBF (Función Base Radial)", "Kriging Ordinario (Mejor Precisión)", "Cúbica (Griddata)", "Lineal (Griddata)"] if KRIGING_DISPONIBLE else ["RBF (Función Base Radial - Recomendado)", "Cúbica (Griddata)", "Lineal (Griddata)"]
-                metodo_interp = st.selectbox("Algoritmo Matemático", algos, key="geo_algo")
-                resolucion = st.slider("Resolución de Malla (Grid)", min_value=100, max_value=500, value=250, step=50, key="geo_res")
-            
-            col_obj = 'Espesor_Deposito_mm' if "Isopacas" in tipo_mapa_geo else 'Tamaño_Promedio_mm'
-            df_mod = df_mapa.dropna(subset=['Latitud', 'Longitud', col_obj]).copy()
-            df_mod = df_mod.groupby(['Latitud', 'Longitud'], as_index=False).agg({col_obj: 'max', 'ID_Muestra': 'first'})
-            
-            if len(df_mod) < 4: st.warning(f"Se requieren al menos 4 puntos para {col_obj}.")
-            else:
-                lon, lat, z = df_mod['Longitud'].values, df_mod['Latitud'].values, df_mod[col_obj].values
-                grid_lon, grid_lat, grid_z, l_lon_min, l_lon_max, l_lat_min, l_lat_max = calcular_modelo_espacial(lon, lat, z, metodo_interp, resolucion)
-                
-                if "Isopacas" in tipo_mapa_geo:
-                    vol_km3, vei = calcular_volumen_integracion_2d(grid_lon, grid_lat, grid_z, c_lat)
-                    st.success(f"**Cálculo de Volumen (Integración Numérica 2D):** Emisión total aproximada: **{vol_km3:.6f} km³** | Nivel VEI Estimado: **{vei}**")
-
-                fig = plt.figure(frameon=False)
-                ax = fig.add_axes([0, 0, 1, 1])
-                ax.axis('off'); ax.set_xlim(l_lon_min, l_lon_max); ax.set_ylim(l_lat_min, l_lat_max)
-                cmap_choice = 'Reds' if "Isopacas" in tipo_mapa_geo else 'viridis'
-                ax.contourf(grid_lon, grid_lat, grid_z, alpha=0.55, cmap=cmap_choice, levels=12)
-                ax.contour(grid_lon, grid_lat, grid_z, colors='black', linewidths=0.6, levels=12) 
-                
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0, transparent=True)
-                buf.seek(0)
-                img_url = f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
-                plt.close(fig); buf.close()
-
-                m_geo = folium.Map(location=[c_lat, c_lon], zoom_start=11, tiles='CartoDB positron')
-                folium.Marker([LAT_CRATER, LON_CRATER], tooltip="Cráter Volcán Puracé", icon=folium.Icon(color="red", icon="info-sign")).add_to(m_geo)
-                folium.raster_layers.ImageOverlay(image=img_url, bounds=[[l_lat_min, l_lon_min], [l_lat_max, l_lon_max]], opacity=0.8).add_to(m_geo)
-                for _, r in df_mod.iterrows(): folium.CircleMarker([r['Latitud'], r['Longitud']], radius=3, color="black", fill=True).add_to(m_geo)
-
-                colormap = cm.LinearColormap(colors=['#FEE0D2', '#FC9272', '#DE2D26', '#99000D'] if "Isopacas" in tipo_mapa_geo else ['#440154', '#31688E', '#35B779', '#FDE725'], vmin=float(grid_z.min()), vmax=float(grid_z.max()))
-                colormap.caption = f"{col_obj} (mm)"
-                m_geo.add_child(colormap)
-                st_folium(m_geo, width="100%", height=600, key="mapa_geo")
-
-        with tab_sim:
-            tipo_mapa_sim = st.radio("Modelo de Análisis:", ["Evolución Temporal (Animación)", "Predicción Espacial (Random Forest)"], horizontal=True)
-            if "Evolución Temporal" in tipo_mapa_sim:
-                df_time = df_mapa.dropna(subset=['Fecha_Recoleccion', 'Espesor_Deposito_mm']).copy()
-                if df_time.empty: st.warning("No hay datos de fecha para animar.")
-                else:
-                    df_time = df_time.sort_values('Fecha_Recoleccion')
-                    df_time['Fecha_Str'] = df_time['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d')
-                    fig_tl = px.scatter_mapbox(df_time, lat="Latitud", lon="Longitud", color="Espesor_Deposito_mm", size="Espesor_Deposito_mm", animation_frame="Fecha_Str", hover_name="ID_Muestra", color_continuous_scale="Reds", size_max=25, zoom=10, mapbox_style="carto-positron", center={"lat": LAT_CRATER, "lon": LON_CRATER}, title="Evolución Espacio-Temporal")
-                    fig_tl.update_layout(margin={"r":0,"t":40,"l":0,"b":0}, height=600)
-                    st.plotly_chart(fig_tl, use_container_width=True)
-
-            elif "Predicción Espacial" in tipo_mapa_sim:
-                if not ML_DISPONIBLE: st.error("La librería scikit-learn no está instalada.")
-                else:
-                    df_ml = df_mapa.dropna(subset=['Espesor_Deposito_mm', 'Distancia_Crater_km', 'Azimut_Crater']).copy()
-                    if len(df_ml) < 4: st.warning("Se requieren al menos 4 muestras para el entrenamiento del modelo.")
-                    else:
-                        st.info("**Modelo Predictivo Espacial:** El algoritmo de Random Forest estima el espesor integrando la distancia al cráter y el azimut (dirección predominante) a partir de los datos históricos.")
-                        X = df_ml[['Distancia_Crater_km', 'Azimut_Crater']]
-                        y = df_ml['Espesor_Deposito_mm']
-                        modelo_rf = RandomForestRegressor(n_estimators=100, random_state=42)
-                        modelo_rf.fit(X, y)
-                        
-                        lon_min, lon_max = df_ml['Longitud'].min() - 0.05, df_ml['Longitud'].max() + 0.05
-                        lat_min, lat_max = df_ml['Latitud'].min() - 0.05, df_ml['Latitud'].max() + 0.05
-                        grid_lon, grid_lat = np.mgrid[lon_min:lon_max:100j, lat_min:lat_max:100j]
-                        distancias_grid, _, azimuts_grid = operaciones_geoespaciales_vectorizadas(grid_lat.flatten(), grid_lon.flatten())
-                        
-                        X_pred = pd.DataFrame({'Distancia_Crater_km': distancias_grid, 'Azimut_Crater': azimuts_grid})
-                        
-                        predicciones = modelo_rf.predict(X_pred)
-                        grid_z_rf = predicciones.reshape(grid_lon.shape)
-                        
-                        fig_rf = go.Figure(data=go.Contour(z=grid_z_rf.T, x=grid_lon[:,0], y=grid_lat[0,:], colorscale='Reds', contours=dict(showlabels=True), name="Espesor Previsto"))
-                        fig_rf.add_trace(go.Scatter(x=df_ml['Longitud'], y=df_ml['Latitud'], mode='markers', marker=dict(color='black', symbol='x', size=8)))
-                        fig_rf.add_trace(go.Scatter(x=[LON_CRATER], y=[LAT_CRATER], mode='markers', marker=dict(color='red', symbol='triangle-up', size=14)))
-                        fig_rf.update_layout(height=600, xaxis_title="Longitud", yaxis_title="Latitud", plot_bgcolor='#FAFAFA')
-                        st.plotly_chart(fig_rf, use_container_width=True)
-
-    except Exception as e: st.error(f"Error al renderizar el módulo espacial: {e}")
-
-def generar_pdf_reporte(m_sel, localizacion, fecha, espesor, tamano, df_graf):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", 'B', 16)
-    pdf.cell(200, 10, txt="REPORTE OFICIAL - OBSERVATORIO VULCANOLOGICO", ln=True, align='C')
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(200, 10, txt=f"Muestra: {m_sel}", ln=True, align='C')
-    pdf.ln(10)
-    pdf.set_font("Arial", '', 12)
-    pdf.cell(200, 10, txt=f"Localizacion: {localizacion}", ln=True)
-    pdf.cell(200, 10, txt=f"Fecha de Recoleccion: {fecha}", ln=True)
-    pdf.cell(200, 10, txt=f"Espesor del Deposito: {espesor}", ln=True)
-    pdf.ln(10)
-    pdf.set_font("Arial", 'B', 14)
-    pdf.cell(200, 10, txt="Composicion Mineralogica (%)", ln=True)
-    pdf.set_font("Arial", '', 12)
-    for index, row in df_graf.iterrows():
-        comp_limpio = str(row['Componente']).encode('latin-1', 'ignore').decode('latin-1')
-        pdf.cell(200, 10, txt=f"- {comp_limpio}: {round(row['Porcentaje'], 2)}%", ln=True)
-    
-    pdf_output = pdf.output(dest='S').encode('latin-1', 'ignore')
-    return f'<a href="data:application/pdf;base64,{base64.b64encode(pdf_output).decode()}" download="Reporte_{m_sel}.pdf" class="button" style="text-decoration:none;background-color:#2980B9;color:white;padding:8px 12px;border-radius:5px;font-size:14px;font-weight:bold;">Descargar Ficha Técnica (PDF)</a>'
-
-def renderizar_modulo_laboratorio(df_fil, df_pct_fil, cols_conteo, cols_macro, c_cristales, fotos_subidas):
-    try:
-        st.subheader("1. Caracterización de Componentes Individual")
-        lista = df_fil["ID_Muestra"].tolist()
-        if "idx_muestra" not in st.session_state or st.session_state["idx_muestra"] >= len(lista): st.session_state["idx_muestra"] = 0
-
-        c_prev, c_sel, c_next = st.columns([0.5, 4, 0.5])
-        with c_prev:
-            if st.button("◀", use_container_width=True): st.session_state["idx_muestra"] = (st.session_state["idx_muestra"] - 1) % len(lista); st.rerun()
-        with c_sel:
-            m_sel = st.selectbox("ID de Muestra", options=lista, index=st.session_state["idx_muestra"], label_visibility="collapsed")
-            st.session_state["idx_muestra"] = lista.index(m_sel)
-        with c_next:
-            if st.button("▶", use_container_width=True): st.session_state["idx_muestra"] = (st.session_state["idx_muestra"] + 1) % len(lista); st.rerun()
-
-        d_crudo = df_fil[df_fil["ID_Muestra"] == m_sel].iloc[0]
-        
-        d_pct = df_pct_fil[df_pct_fil["ID_Muestra"] == m_sel][cols_macro].iloc[0]
-        d_graf = d_pct[d_pct > 0].reset_index(); d_graf.columns = ["Componente", "Porcentaje"]
-        
-        d_cris = d_crudo[c_cristales]
-        d_cris = d_cris[d_cris > 0]
-        if not d_cris.empty and d_cris.sum() > 0:
-            d_cris_pct = (d_cris / d_cris.sum()) * 100
-            d_cris_graf = d_cris_pct.reset_index()
-            d_cris_graf.columns = ["Componente", "Porcentaje"]
-        else:
-            d_cris_graf = pd.DataFrame(columns=["Componente", "Porcentaje"])
-
-        col_g, col_f = st.columns([1.3, 1])
-        with col_g:
-            c_g1, c_g2 = st.columns(2)
-            with c_g1:
-                fig = px.pie(d_graf, names="Componente", values="Porcentaje", hole=0.35, color="Componente", color_discrete_map=color_map_paper)
-                fig.update_traces(textposition="inside", textinfo="percent+label")
-                fig.update_layout(margin=dict(t=20, b=20, l=0, r=0), height=300, showlegend=False, title="Resumen Componentes")
-                st.plotly_chart(fig, use_container_width=True)
-            with c_g2:
-                if not d_cris_graf.empty:
-                    fig2 = px.bar(d_cris_graf, x="Componente", y="Porcentaje", color="Componente", title="% Cristal (Total Cristales)", color_discrete_sequence=colores_profesionales)
-                    fig2.update_traces(marker_line_color='black', marker_line_width=0.8, width=0.3)
-                    fig2.update_layout(
-                        margin=dict(t=30, b=20, l=0, r=0), 
-                        height=300, 
-                        showlegend=False,
-                        plot_bgcolor='white',
-                        paper_bgcolor='white',
-                        yaxis=dict(showgrid=True, gridcolor='lightgray', title=""),
-                        xaxis=dict(showline=True, linecolor='black', title="")
-                    )
-                    st.plotly_chart(fig2, use_container_width=True)
-
-            f_val = pd.to_datetime(d_crudo['Fecha_Recoleccion']).strftime('%Y-%m-%d') if pd.notna(d_crudo.get('Fecha_Recoleccion')) else 'N/A'
-            st.markdown(f"""
-            <div style="background-color:#EBF5FB; padding:10px 14px; border-radius:8px; margin-top:10px; font-size: 13px; border-left: 5px solid #2980B9; color:#1C2833; white-space: nowrap; overflow-x: auto;">
-                <b>Localización:</b> {d_crudo.get('Localizacion','N/A')} &nbsp;|&nbsp; <b>Fecha:</b> {f_val} &nbsp;|&nbsp; <b>Tamaño:</b> {d_crudo.get('Tamaño_Promedio_mm',0)} mm &nbsp;|&nbsp; <b>Espesor:</b> {d_crudo.get('Espesor_Deposito_mm',0)} mm<br>
-                <b>Viento Histórico:</b> {d_crudo.get('Direccion_Viento', 'N/A')}
-            </div>""", unsafe_allow_html=True)
-
-        with col_f:
-            fotos_locales = [f for f in fotos_subidas if m_sel.lower() in f.name.lower()]
-            if fotos_locales:
-                k_est = f"foto_loc_{m_sel}"
-                if k_est not in st.session_state: st.session_state[k_est] = 0
-                st.session_state[k_est] = st.session_state[k_est] % max(1, len(fotos_locales))
-                b1, tx, b2 = st.columns([1, 2, 1])
-                if b1.button("◀", key=f"pl_{m_sel}"): st.session_state[k_est] = (st.session_state[k_est] - 1) % len(fotos_locales)
-                tx.markdown(f"<div style='text-align:center; margin-top:8px;'>Foto {st.session_state[k_est]+1}/{len(fotos_locales)}</div>", unsafe_allow_html=True)
-                if b2.button("▶", key=f"nl_{m_sel}"): st.session_state[k_est] = (st.session_state[k_est] + 1) % len(fotos_locales)
-                st.image(fotos_locales[st.session_state[k_est]], caption=f"Archivo: {fotos_locales[st.session_state[k_est]].name}", use_container_width=True)
-            elif "URLs_Fotos" in d_crudo and pd.notna(d_crudo["URLs_Fotos"]):
-                links = [u.strip() for u in str(d_crudo["URLs_Fotos"]).split(",") if u.strip().lower() != "nan"]
-                if links:
-                    k_est = f"foto_url_{m_sel}"
-                    if k_est not in st.session_state: st.session_state[k_est] = 0
-                    st.session_state[k_est] = st.session_state[k_est] % max(1, len(links))
-                    b1, tx, b2 = st.columns([1, 2, 1])
-                    if b1.button("◀", key=f"pu_{m_sel}"): st.session_state[k_est] = (st.session_state[k_est] - 1) % len(links)
-                    tx.markdown(f"<div style='text-align:center; margin-top:8px;'>Foto {st.session_state[k_est]+1}/{len(links)}</div>", unsafe_allow_html=True)
-                    if b2.button("▶", key=f"nu_{m_sel}"): st.session_state[k_est] = (st.session_state[k_est] + 1) % len(links)
-                    st.image(obtener_url_imagen(links[st.session_state[k_est]]), caption=f"{m_sel}", use_container_width=True)
-
-        st.markdown("---")
-        
-        # --- 2. TERNARIO Y ROSA DE VIENTOS ---
-        st.subheader("2. Diagramas de Petrología y Dispersión")
-        c1, c2 = st.columns(2)
-        with c1:
-            df_tp = df_fil.copy()
-            df_tp['Vidrio'] = df_tp['Fragmentos vesiculados frescos'] + df_tp['Fragmentos vesiculados alterados']
-            df_tp['Líticos'] = df_tp['Líticos volcánicos frescos'] + df_tp['Líticos volcánicos alterados'] + df_tp['Líticos no volcánicos frescos'] + df_tp['Líticos no volcánicos alterados']
-            df_tp['Cristales_Ternario'] = df_tp['Cristales']
-            
-            df_tp['Suma_VLC'] = df_tp['Vidrio'] + df_tp['Líticos'] + df_tp['Cristales_Ternario']
-            df_tp = df_tp[df_tp['Suma_VLC'] > 0]
-            if not df_tp.empty:
-                df_tp['V%'] = (df_tp['Vidrio'] / df_tp['Suma_VLC']) * 100
-                df_tp['L%'] = (df_tp['Líticos'] / df_tp['Suma_VLC']) * 100
-                df_tp['C%'] = (df_tp['Cristales_Ternario'] / df_tp['Suma_VLC']) * 100
-                fig_t = px.scatter_ternary(df_tp, a='V%', b='L%', c='C%', color="Espesor_Deposito_mm", color_continuous_scale="Reds", hover_name="ID_Muestra", size="Tamaño_Promedio_mm", title="Clasificación Petrológica (100% Magmático)")
-                fig_t.update_layout(ternary=dict(aaxis_title='Vidrio %', baxis_title='Líticos %', caxis_title='Cristales %'), margin=dict(t=40,b=40,l=40,r=40))
-                st.plotly_chart(fig_t, use_container_width=True)
-
-        with c2:
-            v_vel, v_dir = obtener_clima_crater_actual()
-            clima_txt = f"Viento Actual (Satélite): {v_vel} km/h hacia el {v_dir}" if v_vel else "Viento Actual (Satélite): No disponible"
-            if 'Direccion_Viento' in df_fil.columns:
-                df_polar = df_fil.groupby('Direccion_Viento')['Espesor_Deposito_mm'].max().reset_index()
-                fig_p = px.bar_polar(df_polar, r="Espesor_Deposito_mm", theta="Direccion_Viento", color="Espesor_Deposito_mm", template="plotly_white", color_continuous_scale="Reds", title=f"Rosa de Dispersión Histórica (Espesor Máximo)<br><sup style='font-size:12px'>{clima_txt}</sup>", category_orders={"Direccion_Viento": DIRECCIONES_BRUJULA})
-                fig_p.update_layout(polar=dict(angularaxis=dict(direction='clockwise', rotation=90)))
-                st.plotly_chart(fig_p, use_container_width=True)
-
-        st.markdown("---")
-        
-        # --- 3. EVOLUCIÓN TEMPORAL ---
-        st.subheader("3. Evolución Temporal y Seguimiento")
-        if 'Fecha_Recoleccion' in df_fil.columns and not df_fil['Fecha_Recoleccion'].dropna().empty:
-            meses_disp = sorted(df_fil['Fecha_Recoleccion'].dt.month.dropna().unique())
-            mes_dict = {1:'Enero', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
-            meses_sel = st.multiselect("Filtrar por Mes (Aplica a seguimiento temporal):", meses_disp, default=meses_disp, format_func=lambda x: mes_dict.get(x, str(x)))
-            
-            df_track = df_fil[df_fil['Fecha_Recoleccion'].dt.month.isin(meses_sel)].copy()
-            df_pct_track = df_pct_fil[df_fil['Fecha_Recoleccion'].dt.month.isin(meses_sel)].copy()
-            df_track = df_track.sort_values('Fecha_Recoleccion')
-            
-            col_t1, col_t2 = st.columns(2)
-            with col_t1:
-                if not df_track.empty:
-                    df_a = df_pct_track.copy()
-                    df_a['Fecha'] = df_track['Fecha_Recoleccion']
-                    df_a = df_a.sort_values('Fecha').groupby('Fecha', as_index=False)[cols_macro].mean()
-                    df_a = df_a.melt(id_vars='Fecha', value_vars=cols_macro, var_name='Componente', value_name='Porcentaje')
-                    fig_a = px.area(df_a, x="Fecha", y="Porcentaje", color="Componente", color_discrete_map=color_map_paper, title="Evolución Mineralógica Macro")
-                    fig_a.update_layout(yaxis=dict(range=[0, 100]), margin=dict(t=30, b=20, l=10, r=10))
-                    st.plotly_chart(fig_a, use_container_width=True)
-                
-            with col_t2:
-                if not df_track.empty and 'Tamaño_Promedio_mm' in df_track.columns:
-                    fig_l = px.line(df_track, x="Fecha_Recoleccion", y="Tamaño_Promedio_mm", color="Localizacion", markers=True, hover_name="ID_Muestra", color_discrete_sequence=colores_profesionales, title="Seguimiento de Tamaño de Grano")
-                    fig_l.update_traces(line=dict(width=3), marker=dict(size=8)); st.plotly_chart(fig_l, use_container_width=True)
-            
-            st.markdown("---")
-            
-            # --- 4. RELACIONES ESPACIALES Y ESTADÍSTICAS ---
-            st.subheader("4. Análisis Espacial y Correlación")
-            c_dec, c_cor = st.columns(2)
-            with c_dec:
-                if 'Distancia_Crater_km' in df_track.columns and 'Espesor_Deposito_mm' in df_track.columns:
-                    fig_decay = px.scatter(df_track, x="Distancia_Crater_km", y="Espesor_Deposito_mm", color="Localizacion", size="Tamaño_Promedio_mm", hover_name="ID_Muestra", title="Decaimiento Espacial (Espesor vs. Distancia)")
-                    st.plotly_chart(fig_decay, use_container_width=True)
-
-            with c_cor:
-                cols_to_corr = cols_macro + ['Espesor_Deposito_mm', 'Tamaño_Promedio_mm', 'Distancia_Crater_km']
-                cols_to_corr = [c for c in cols_to_corr if c in df_track.columns]
-                if len(cols_to_corr) > 1:
-                    df_corr = df_track[cols_to_corr].corr(method='pearson')
-                    fig_corr = px.imshow(df_corr, text_auto=".2f", aspect="auto", color_continuous_scale="RdBu_r", title="Matriz de Correlación Macro", origin="lower")
-                    st.plotly_chart(fig_corr, use_container_width=True)
-        else: st.info("Requiere columna de fecha válida para mostrar la evolución temporal.")
-    except Exception as e: st.error(f"Error renderizando el módulo de laboratorio: {e}")
-
-def renderizar_modulo_comparativo(df_fil, df_pct_fil, cols_macro, cols_conteo, orden_cat_detallado):
-    try:
-        st.subheader("Análisis Comparativo Multi-Muestra")
-        col_f1, col_f2 = st.columns(2)
-        with col_f1:
-            locs_disponibles = sorted(df_fil['Localizacion'].dropna().astype(str).unique().tolist())
-            filtro_v = st.multiselect("Filtrar opciones por Localización:", locs_disponibles, default=[])
-        with col_f2:
-            if 'Fecha_Recoleccion' in df_fil.columns and not df_fil['Fecha_Recoleccion'].dropna().empty:
-                fechas_disponibles = sorted(df_fil['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d').dropna().unique().tolist(), reverse=True)
-                filtro_f = st.multiselect("Filtrar opciones por Fecha:", fechas_disponibles, default=[])
-            else: filtro_f = []
-
-        df_opciones = df_fil.copy()
-        if filtro_v: df_opciones = df_opciones[df_opciones['Localizacion'].isin(filtro_v)]
-        if filtro_f and 'Fecha_Recoleccion' in df_opciones.columns:
-            df_opciones = df_opciones[df_opciones['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d').isin(filtro_f)]
-
-        muestras_disponibles = df_opciones['ID_Muestra'].tolist()
-        muestras_seleccionadas = st.multiselect("Seleccione las muestras a comparar:", muestras_disponibles, default=muestras_disponibles[:3] if len(muestras_disponibles) >= 3 else muestras_disponibles)
-
-        if not muestras_seleccionadas: return st.info("Seleccione al menos una muestra para iniciar la comparativa.")
-
-        st.markdown("---")
-        st.subheader("Variación Composicional (% Componentes)")
-        
-        nivel_detalle = st.radio("Nivel de Análisis:", ["Resumen Componentes Contados (Macro)", "Porcentaje de Componentes (Detallado)"], horizontal=True)
-        cols_plot = cols_macro if "Macro" in nivel_detalle else cols_conteo
-        
-        orden_apilado_macro = [
-            "Fragmentos vesiculados frescos",
-            "Fragmentos vesiculados alterados",
-            "Cristales",
-            "Líticos volcánicos frescos",
-            "Líticos volcánicos alterados",
-            "Líticos no volcánicos frescos",
-            "Líticos no volcánicos alterados",
-            "Otros"
-        ]
-        
-        orden_apilado = orden_apilado_macro if "Macro" in nivel_detalle else orden_cat_detallado
-        cmap = color_map_paper if "Macro" in nivel_detalle else None
-        
-        df_comp_pct = df_pct_fil[df_pct_fil['ID_Muestra'].isin(muestras_seleccionadas)].copy()
-        df_melted = df_comp_pct.melt(id_vars=['ID_Muestra'], value_vars=cols_plot, var_name='Componente', value_name='Porcentaje')
-        df_melted = df_melted[df_melted['Porcentaje'] > 0] 
-        
-        fig_bar = px.bar(
-            df_melted, x="ID_Muestra", y="Porcentaje", color="Componente", 
-            color_discrete_map=cmap, barmode="stack", 
-            category_orders={"Componente": orden_apilado},
-            color_discrete_sequence=px.colors.qualitative.Pastel if not cmap else None
-        )
-        
-        fig_bar.update_traces(
-            hovertemplate='<b>%{x}</b><br>%{data.name}: %{y:.1f}%<extra></extra>',
-            marker_line_color='black',
-            marker_line_width=0.8,
-            width=0.3
-        )
-        
-        fig_bar.update_layout(
-            height=600, 
-            margin=dict(t=30, b=100), 
-            yaxis=dict(
-                title="<b>Porcentaje (%)</b>", 
-                range=[0, 100], 
-                dtick=10, 
-                showgrid=True, 
-                gridcolor='lightgray'
-            ),
-            xaxis=dict(
-                title="", 
-                tickangle=-90, 
-                showline=True, 
-                linecolor='black'
-            ),
-            plot_bgcolor='white',
-            paper_bgcolor='white',
-            legend_title="<b>Componente</b>"
-        )
-        st.plotly_chart(fig_bar, use_container_width=True)
-
-        st.markdown("---")
-        st.subheader("Comparativa Físico-Espacial")
-        cols_fisicas = ['ID_Muestra', 'Localizacion', 'Fecha_Recoleccion', 'Tamaño_Promedio_mm', 'Espesor_Deposito_mm', 'Distancia_Crater_km']
-        df_fisico = df_fil[df_fil['ID_Muestra'].isin(muestras_seleccionadas)][[c for c in cols_fisicas if c in df_fil.columns]].copy()
-        if 'Fecha_Recoleccion' in df_fisico.columns: df_fisico['Fecha_Recoleccion'] = df_fisico['Fecha_Recoleccion'].dt.strftime('%Y-%m-%d')
-        st.dataframe(df_fisico, hide_index=True, use_container_width=True)
-        
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_fisico.to_excel(writer, index=False, sheet_name='Datos_Fisicos_Geo')
-            df_comp_pct.to_excel(writer, index=False, sheet_name='Quimica_Porcentajes')
-            
-        st.download_button(label="Descargar Comparativa Excel (.xlsx)", data=output.getvalue(), file_name="comparativa_cvlc.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    except Exception as e: st.error(f"Error renderizando el módulo comparativo: {e}")
-
-def renderizar_modulo_operativo(df_fil):
-    try:
-        st.subheader("Control de Calidad (QA/QC) Automático")
-        errores = []
-        fuera_limites = df_fil[(df_fil['Latitud'] > 5) | (df_fil['Latitud'] < -5) | (df_fil['Longitud'] > -70) | (df_fil['Longitud'] < -80)]
-        if not fuera_limites.empty: errores.append(f"{len(fuera_limites)} muestras con coordenadas anómalas.")
-        esp_cero = df_fil[df_fil['Espesor_Deposito_mm'] <= 0]
-        if not esp_cero.empty: errores.append(f"{len(esp_cero)} muestras tienen espesor 0 o negativo.")
-        
-        if 'Total_Granos_Calc' in df_fil.columns:
-            sin_minerales = df_fil[df_fil['Total_Granos_Calc'] == 0]
-            if not sin_minerales.empty: errores.append(f"{len(sin_minerales)} muestras sin conteo mineralógico válido.")
-
-        if errores:
-            for err in errores: st.error(f"[ALERTA QA/QC]: {err}")
-        else: st.success("[QA/QC Aprobado]: Integridad total de datos confirmada.")
-
-        st.markdown("---")
-        st.subheader("Base de Datos Filtrada")
-        cols_mostrar = ['ID_Muestra', 'Localizacion', 'Distancia_Crater_km', 'Espesor_Deposito_mm', 'Enlace_Reporte']
-        cols_existentes = [c for c in cols_mostrar if c in df_fil.columns]
-        df_mostrar = df_fil[cols_existentes].copy()
-        
-        st.dataframe(df_mostrar, hide_index=True, use_container_width=True)
-        
-        st.markdown("---"); st.subheader("Base de Datos Estructural (Cruda Original)")
-        cols_excluir = ['Vidrio', 'Líticos', 'Cristales', 'Otros', 'Félsicos', 'Máficos', 'Total_Granos_Calc']
-        cols_mostrar_crudo = [c for c in df_fil.columns if c not in cols_excluir]
-        st.dataframe(df_fil[cols_mostrar_crudo], use_container_width=True)
-    except Exception as e: st.error(f"Error cargando el módulo de datos operativos: {e}")
-
-# ==========================================
-# 5. EJECUCIÓN PRINCIPAL (FLUJO DE UI)
-# ==========================================
-st.sidebar.title("Panel de Control")
-usar_sql = st.sidebar.checkbox("Habilitar Base de Datos SQL")
-if st.sidebar.button("Actualizar Datos de Origen", use_container_width=True): st.cache_data.clear(); st.rerun()
-st.sidebar.markdown("---")
-
-with st.sidebar.expander("Carga de Datos y Conexiones", expanded=not usar_sql):
-    url_gs = st.text_input("Link Google Sheets (Público)", placeholder="Pega el link...", disabled=usar_sql)
-    a_sub = st.file_uploader("Archivo Local Excel/CSV", type=["xlsx", "csv"], disabled=usar_sql)
-    a_geo = st.file_uploader("Capa Veredas (.geojson)", type=["geojson", "json"])
-    fotos_subidas = st.file_uploader("Subir Fotos Locales (Multiselección)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
-
-df_bruto, df_pct_bruto, c_conteo, c_macro, c_cristales, orden_cat_detallado = cargar_y_limpiar_datos(a_sub, url_gs, usar_sql)
-
-if df_bruto.empty:
-    st.error("No se detectaron datos válidos.")
-    st.stop()
-
-st.sidebar.markdown("---")
-with st.sidebar.expander("Filtros Espaciales Generales"):
-    v_unicas = sorted(df_bruto.get('Localizacion', pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
-    if "v_sel" not in st.session_state: st.session_state["v_sel"] = v_unicas
-    col1, col2 = st.columns(2)
-    if col1.button("Todas", use_container_width=True): st.session_state["v_sel"] = v_unicas
-    if col2.button("Limpiar", use_container_width=True): st.session_state["v_sel"] = []
-    v_sel = st.multiselect("Localización:", v_unicas, key="v_sel")
-
-with st.sidebar.expander("Filtros Temporales Generales"):
-    m_f = pd.Series(True, index=df_bruto.index)
-    if 'Fecha_Recoleccion' in df_bruto.columns and not df_bruto['Fecha_Recoleccion'].isnull().all():
-        df_bruto['Anio'] = df_bruto['Fecha_Recoleccion'].dt.year
-        df_bruto['Mes'] = df_bruto['Fecha_Recoleccion'].dt.month
-        a_sel = st.selectbox("Año:", ["Todos"] + sorted(df_bruto['Anio'].dropna().unique(), reverse=True))
-        
-        meses_unicos = sorted(df_bruto[df_bruto['Anio']==a_sel]['Mes'].dropna().unique() if a_sel != "Todos" else range(1,13))
-        m_sel = st.multiselect("Meses (Aplica a mapas):", meses_unicos, default=meses_unicos)
-        
-        if a_sel != "Todos": m_f &= (df_bruto['Anio'] == a_sel)
-        if m_sel: m_f &= (df_bruto['Mes'].isin(m_sel))
-
-m_v = df_bruto['Localizacion'].astype(str).isin(v_sel) if v_sel else pd.Series(True, index=df_bruto.index)
-df_fil, df_pct_fil = df_bruto[m_v & m_f], df_pct_bruto[m_v & m_f]
-
-if df_fil.empty: st.warning("Sin resultados para los filtros aplicados.")
-else:
-    renderizar_kpis(df_fil, c_macro)
-    t_espacial, t_laboratorio, t_comparativo, t_operativo = st.tabs([
-        "Módulo Espacial (Mapas)", 
-        "Módulo de Laboratorio (Petrología)", 
-        "Módulo Comparativo Multi-Muestra",
-        "Módulo Operativo (QA/QC y Base de Datos)"
-    ])
-    
-    with t_espacial: renderizar_modulo_espacial(df_fil, a_geo)
-    with t_laboratorio: renderizar_modulo_laboratorio(df_fil, df_pct_fil, c_conteo, c_macro, c_cristales, fotos_subidas)
-    with t_comparativo: renderizar_modulo_comparativo(df_fil, df_pct_fil, c_macro, c_conteo, orden_cat_detallado)
-    with t_operativo: renderizar_modulo_operativo(df_fil)
+    y = np.cos(lat1) * np.sin(lat2) - (np.sin(lat
